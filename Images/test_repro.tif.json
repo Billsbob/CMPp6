@@ -1,0 +1,21 @@
+{
+    "display_name": "test_repro.tif",
+    "filters": [],
+    "filter_params": {},
+    "invert": false,
+    "color": "grayscale",
+    "contrast_stretch": false,
+    "opacity": 1.0,
+    "normalize": false,
+    "transforms": [
+        {
+            "type": "crop",
+            "params": [
+                10,
+                10,
+                50,
+                50
+            ]
+        }
+    ]
+}

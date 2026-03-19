@@ -1,0 +1,21 @@
+{
+    "filters": [],
+    "filter_params": {},
+    "invert": false,
+    "color": "grayscale",
+    "contrast_stretch": false,
+    "opacity": 1.0,
+    "normalize": false,
+    "transforms": [
+        {
+            "type": "crop",
+            "params": [
+                10,
+                10,
+                50,
+                50
+            ]
+        }
+    ],
+    "display_name": "repro_mask.png"
+}
