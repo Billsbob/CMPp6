@@ -179,15 +179,17 @@ class Asset:
             data = self.data
 
         if self.is_mask:
-            # For masks, we should ideally use the palette/colormap
             img = Image.open(self.path)
             if img.mode == 'P':
                 img = img.convert('RGBA')
             elif img.mode == '1':
                 img = img.convert('L')
             
-            qimg = QImage(img.tobytes(), img.size[0], img.size[1], QImage.Format_RGBA8888 if img.mode == 'RGBA' else QImage.Format_Grayscale8)
-            return qimg
+            data = np.ascontiguousarray(np.array(img))
+            format = QImage.Format_RGBA8888 if img.mode == 'RGBA' else QImage.Format_Grayscale8
+            qimg = QImage(data.data, img.size[0], img.size[1], data.strides[0], format)
+            qimg.ndarray = data
+            return qimg.copy()
         else:
             # Rendered data is float32 usually [0, 1] if normalized or stretched
             # Let's ensure it's in a good range for display
@@ -200,8 +202,11 @@ class Asset:
                 else:
                     display_data = np.zeros_like(data, dtype=np.uint8)
             
+            display_data = np.ascontiguousarray(display_data)
             height, width = display_data.shape
-            return QImage(display_data.data, width, height, width, QImage.Format_Grayscale8)
+            qimg = QImage(display_data.data, width, height, display_data.strides[0], QImage.Format_Grayscale8)
+            qimg.ndarray = display_data
+            return qimg.copy()
 
 class AssetManager:
     def __init__(self):
@@ -238,13 +243,25 @@ class AssetManager:
     def get_mask_list(self):
         return sorted([mask.name for mask in self.masks.values()])
 
-    def get_asset_pair(self, name):
-        # name might be display name
-        image = None
+    def get_image_by_name(self, name):
+        if name in self.images:
+            return self.images[name]
         for img in self.images.values():
             if img.name == name:
-                image = img
-                break
+                return img
+        return None
+
+    def get_mask_by_name(self, name):
+        if name in self.masks:
+            return self.masks[name]
+        for mask in self.masks.values():
+            if mask.name == name:
+                return mask
+        return None
+
+    def get_asset_pair(self, name):
+        # name might be display name
+        image = self.get_image_by_name(name)
         
         if not image:
             return None, None

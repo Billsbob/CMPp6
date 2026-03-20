@@ -8,14 +8,14 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QAction, QPixmap, QIcon, QPainter, QWheelEvent, QTransform, QPalette, QPen, QColor, QBrush
 from PySide6.QtCore import Qt, QSize, QPoint, QPointF, QRectF
 import os
+import json
+from datetime import datetime
 import tifffile
 import numpy as np
-import pandas as pd
 from PIL import Image
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from assets import AssetManager
 from image_handler import ImageDisplayHandler
+from graphs import calculate_normalized_graphs, create_graph_pixmap
 from clustering import apply_kmeans, apply_isodata, apply_dbscan, apply_hdbscan, apply_optics, apply_isodata_cuda, apply_dbscan_cuda, is_cuda_available
 
 class ZoomableView(QGraphicsView):
@@ -44,6 +44,7 @@ class ZoomableView(QGraphicsView):
         if pixmap:
             self.pixmap_item.setPixmap(pixmap)
             self.scene.setSceneRect(QRectF(pixmap.rect()))
+            self.viewport().update()
         else:
             self.pixmap_item.setPixmap(QPixmap())
             self.scene.setSceneRect(QRectF())
@@ -728,47 +729,6 @@ class SaveVisibleDialog(QDialog):
         }
         return options
 
-class HistogramDialog(QDialog):
-    def __init__(self, images, masks, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Generate Histogram")
-        self.images = images
-        self.masks = masks
-        self.setup_ui()
-
-    def setup_ui(self):
-        layout = QFormLayout(self)
-
-        self.image_combo = QComboBox()
-        self.image_combo.addItems(self.images)
-        layout.addRow("Select Image:", self.image_combo)
-
-        self.mask_combo = QComboBox()
-        self.mask_combo.addItems(self.masks)
-        layout.addRow("Select Mask:", self.mask_combo)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addRow(buttons)
-
-    def get_selection(self):
-        return self.image_combo.currentText(), self.mask_combo.currentText()
-
-class HistogramViewer(QWidget):
-    def __init__(self, data, title="Histogram", parent=None):
-        super().__init__(parent)
-        self.layout = QVBoxLayout(self)
-        self.figure, self.ax = plt.subplots()
-        self.canvas = FigureCanvas(self.figure)
-        self.layout.addWidget(self.canvas)
-        
-        self.ax.hist(data.flatten(), bins=256, color='gray', alpha=0.7)
-        self.ax.set_title(title)
-        self.ax.set_xlabel("Pixel Value")
-        self.ax.set_ylabel("Frequency")
-        self.canvas.draw()
-
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -778,6 +738,7 @@ class MainWindow(QMainWindow):
 
         self.asset_manager = AssetManager()
         self.image_handler = ImageDisplayHandler()
+        self.graphs = {} # name -> {image_data, mask_data, orig_image_name, orig_mask_name}
         self.working_dir = None
         
         self.cached_composite = None
@@ -864,14 +825,37 @@ class MainWindow(QMainWindow):
         dock_layout.addWidget(QLabel("Masks:"))
         dock_layout.addWidget(mask_container)
 
-        # Histogram list
-        self.hist_list = QListWidget()
-        self.hist_list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.hist_list.customContextMenuRequested.connect(self._show_hist_context_menu)
-        self.hist_list.itemDoubleClicked.connect(self._hist_item_double_clicked)
+        # Graph list
+        hist_container = QWidget()
+        hist_h_layout = QHBoxLayout(hist_container)
+        hist_h_layout.setContentsMargins(0, 0, 0, 0)
         
-        dock_layout.addWidget(QLabel("Histograms:"))
-        dock_layout.addWidget(self.hist_list)
+        hist_btn_layout = QVBoxLayout()
+        hist_btn_layout.setContentsMargins(0, 0, 5, 0)
+        
+        self.select_all_hists_btn = QPushButton("Select\nAll")
+        self.select_all_hists_btn.setFixedWidth(60)
+        self.select_all_hists_btn.clicked.connect(self._select_all_graphs)
+        self.select_none_hists_btn = QPushButton("Select\nNone")
+        self.select_none_hists_btn.setFixedWidth(60)
+        self.select_none_hists_btn.clicked.connect(self._select_none_graphs)
+        
+        hist_btn_layout.addWidget(self.select_all_hists_btn)
+        hist_btn_layout.addWidget(self.select_none_hists_btn)
+        hist_btn_layout.addStretch()
+        
+        self.graph_list = QListWidget()
+        self.graph_list.setIconSize(QSize(100, 100))
+        self.graph_list.setSelectionMode(QListWidget.MultiSelection)
+        self.graph_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.graph_list.customContextMenuRequested.connect(self._show_graph_context_menu)
+        self.graph_list.itemClicked.connect(self._graph_clicked)
+        
+        hist_h_layout.addLayout(hist_btn_layout)
+        hist_h_layout.addWidget(self.graph_list)
+        
+        dock_layout.addWidget(QLabel("Graphs:"))
+        dock_layout.addWidget(hist_container)
 
         # Mask opacity slider
         dock_layout.addWidget(QLabel("Mask Opacity:"))
@@ -891,6 +875,7 @@ class MainWindow(QMainWindow):
 
         # Create the image viewer in a sub-window
         self.viewer_subwindow = QMdiSubWindow()
+        self.viewer_subwindow.setAttribute(Qt.WA_DeleteOnClose, False)
         self.viewer_subwindow.setWindowTitle("Image Viewer")
         
         self.viewer_view = ZoomableView()
@@ -898,6 +883,15 @@ class MainWindow(QMainWindow):
         self.viewer_subwindow.setWidget(self.viewer_view)
         self.mdi_area.addSubWindow(self.viewer_subwindow)
         self.viewer_subwindow.show()
+
+        # Create the graph viewer in a sub-window
+        self.graph_subwindow = QMdiSubWindow()
+        self.graph_subwindow.setAttribute(Qt.WA_DeleteOnClose, False)
+        self.graph_subwindow.setWindowTitle("Graph Viewer")
+        self.graph_view = GraphViewer(self)
+        self.graph_subwindow.setWidget(self.graph_view)
+        self.mdi_area.addSubWindow(self.graph_subwindow)
+        self.graph_subwindow.show()
 
     def _create_menu_bar(self):
         menu_bar = self.menuBar()
@@ -963,10 +957,6 @@ class MainWindow(QMainWindow):
         merge_masks_action.triggered.connect(self._merge_masks_triggered)
         tools_menu.addAction(merge_masks_action)
 
-        histogram_action = QAction("Generate Histogram", self)
-        histogram_action.triggered.connect(self._generate_histogram_triggered)
-        tools_menu.addAction(histogram_action)
-
         filters_menu = tools_menu.addMenu("Filters")
         
         gaussian_action = QAction("Gaussian", self)
@@ -998,11 +988,136 @@ class MainWindow(QMainWindow):
         export_masks_action.triggered.connect(self._export_modified_masks)
         tools_menu.addAction(export_masks_action)
 
+        # "Analysis" dropdown button
+        analysis_menu = menu_bar.addMenu("Analysis")
+
+        graph_action = QAction("Create Graph", self)
+        graph_action.triggered.connect(self._create_graph_triggered)
+        analysis_menu.addAction(graph_action)
+
+        bivariate_graph_action = QAction("Create Bivariate Graph", self)
+        bivariate_graph_action.triggered.connect(self._create_bivariate_graph_triggered)
+        analysis_menu.addAction(bivariate_graph_action)
+
+        joint_kde_action = QAction("Create Joint KDE Graph", self)
+        joint_kde_action.triggered.connect(self._create_joint_kde_triggered)
+        analysis_menu.addAction(joint_kde_action)
+
+        ridge_plot_action = QAction("Create Ridge Plot", self)
+        ridge_plot_action.triggered.connect(self._create_ridgeplot_triggered)
+        analysis_menu.addAction(ridge_plot_action)
+
+        group_csv_action = QAction("Group .csv", self)
+        group_csv_action.triggered.connect(self._save_group_graph_csv)
+        analysis_menu.addAction(group_csv_action)
+
     def _home_triggered(self):
         directory = QFileDialog.getExistingDirectory(self, "Select Working Directory")
         if directory:
             self.working_dir = directory
             self.asset_manager.set_working_dir(directory)
+            
+            # Load graphs if "Graphs" folder exists
+            graph_dir = os.path.join(directory, "Graphs")
+            if os.path.isdir(graph_dir):
+                for filename in os.listdir(graph_dir):
+                    if filename.endswith(".json"):
+                        file_path = os.path.join(graph_dir, filename)
+                        try:
+                            with open(file_path, 'r', encoding='utf-8') as f:
+                                graph_data = json.load(f)
+                                
+                                # Could be a list of graphs or a single graph dictionary
+                                if isinstance(graph_data, list):
+                                    graph_list = graph_data
+                                else:
+                                    graph_list = [graph_data]
+                                    
+                                for graph_info in graph_list:
+                                    name = graph_info.get("name")
+                                    if not name:
+                                        continue
+                                        
+                                    # To satisfy refresh_graph_view, we need image_data and mask_data, 
+                                    # but we can also use pre-calculated data if those are missing.
+                                    g_type = graph_info.get("type", "standard")
+                                    
+                                    # Initialize graph info
+                                    self.graphs[name] = {'type': g_type}
+                                    
+                                    # Copy all available fields from JSON
+                                    for key, value in graph_info.items():
+                                        if key not in ['image_data', 'mask_data', 'image1_data', 'image2_data', 'image_datasets']:
+                                            self.graphs[name][key] = value
+                                    
+                                    # Attempt to find the original images/masks in asset_manager
+                                    if g_type == "standard":
+                                        img_name = graph_info.get("image")
+                                        mask_name = graph_info.get("mask")
+                                        
+                                        image_asset = self.asset_manager.get_image_by_name(img_name)
+                                        mask_asset = self.asset_manager.get_mask_by_name(mask_name)
+                                        
+                                        if image_asset and mask_asset:
+                                            self.graphs[name].update({
+                                                'image_data': image_asset.get_rendered_data(for_clustering=False),
+                                                'mask_data': mask_asset.data,
+                                                'orig_image_name': img_name,
+                                                'orig_mask_name': mask_name
+                                            })
+                                            # Default color? Let's use image color
+                                            color = self.image_handler.get_asset_color(img_name)
+                                            self.image_handler.set_asset_color(name, color)
+                                        else:
+                                            # If assets are missing, we still have name, type, counts, bins from JSON
+                                            # Set a default color for missing assets
+                                            self.image_handler.set_asset_color(name, "white")
+                                            
+                                    elif g_type in ["bivariate", "joint_kde"]:
+                                        img1_name = graph_info.get("image1")
+                                        img2_name = graph_info.get("image2")
+                                        mask_name = graph_info.get("mask")
+                                        
+                                        image1_asset = self.asset_manager.get_image_by_name(img1_name)
+                                        image2_asset = self.asset_manager.get_image_by_name(img2_name)
+                                        mask_asset = self.asset_manager.get_mask_by_name(mask_name)
+                                        
+                                        if image1_asset and image2_asset and mask_asset:
+                                            self.graphs[name].update({
+                                                'image1_data': image1_asset.get_rendered_data(for_clustering=False),
+                                                'image2_data': image2_asset.get_rendered_data(for_clustering=False),
+                                                'mask_data': mask_asset.data,
+                                                'image1_name': img1_name,
+                                                'image2_name': img2_name,
+                                                'orig_mask_name': mask_name
+                                            })
+                                        self.image_handler.set_asset_color(name, "magenta")
+                                        
+                                    elif g_type == "ridge":
+                                        image_names = graph_info.get("image_names", [])
+                                        mask_name = graph_info.get("mask")
+                                        
+                                        mask_asset = self.asset_manager.get_mask_by_name(mask_name)
+                                        images_found = []
+                                        for img_n in image_names:
+                                            img_asset = self.asset_manager.get_image_by_name(img_n)
+                                            if img_asset:
+                                                images_found.append(img_asset.get_rendered_data(for_clustering=False))
+                                            else:
+                                                images_found.append(None)
+                                                
+                                        if mask_asset and all(img is not None for img in images_found):
+                                            self.graphs[name].update({
+                                                'image_datasets': images_found,
+                                                'mask_data': mask_asset.data,
+                                                'image_names': image_names,
+                                                'orig_mask_name': mask_name
+                                            })
+                                        self.image_handler.set_asset_color(name, "cyan")
+
+                        except Exception as e:
+                            print(f"Error loading graph file {file_path}: {e}")
+
             self._update_asset_list()
             self.statusBar().showMessage(f"Working Directory: {self.working_dir}")
             print(f"Working directory set to: {self.working_dir}")
@@ -1032,11 +1147,7 @@ class MainWindow(QMainWindow):
 
         self.mask_list.clear()
         for name in self.asset_manager.get_mask_list():
-            mask_asset = None
-            for m in self.asset_manager.masks.values():
-                if m.name == name:
-                    mask_asset = m
-                    break
+            mask_asset = self.asset_manager.get_mask_by_name(name)
             
             if not mask_asset:
                 continue
@@ -1051,25 +1162,52 @@ class MainWindow(QMainWindow):
             self.mask_list.addItem(item)
             
             # Restore visibility status
-            if self.image_handler.is_visible(name, is_mask=True):
+            if self.image_handler.is_visible(name, is_graph=True):
                 item.setSelected(True)
 
-        # Update histogram list
-        self.hist_list.clear()
-        if self.working_dir:
-            hist_dir = os.path.join(self.working_dir, "histograms")
-            if os.path.exists(hist_dir):
-                for filename in os.listdir(hist_dir):
-                    if filename.endswith(".png"):
-                        item = QListWidgetItem(filename)
-                        # Optionally add thumbnail for histogram
-                        self.hist_list.addItem(item)
+        for name in self.graphs.keys():
+            item = QListWidgetItem(name)
+            # We don't have thumbnails for graphs, but we could generate one or use a placeholder
+            self.graph_list.addItem(item)
+            if self.image_handler.is_visible(name, is_graph=True):
+                item.setSelected(True)
+            
+            # If the graph has assets, they might already be visible or not.
+            # We don't force selection here unless it was already visible in handler.
 
     def _show_image_context_menu(self, position: QPoint):
         self._show_context_menu(self.image_list, position, is_mask=False)
 
     def _show_mask_context_menu(self, position: QPoint):
         self._show_context_menu(self.mask_list, position, is_mask=True)
+
+    def _show_graph_context_menu(self, position: QPoint):
+        item = self.graph_list.itemAt(position)
+        if not item:
+            return
+
+        name = item.text()
+        menu = QMenu()
+        
+        # Rename
+        rename_action = QAction("Rename", self)
+        rename_action.triggered.connect(lambda: self._rename_graph(name))
+        menu.addAction(rename_action)
+        
+        # Save CSV
+        save_csv_action = QAction("Save .csv", self)
+        save_csv_action.triggered.connect(lambda: self._save_graph_csv(name))
+        menu.addAction(save_csv_action)
+        
+        menu.addSeparator()
+
+        color_menu = menu.addMenu("Change Color")
+        for color_name in self.image_handler.COLORS.keys():
+            action = QAction(color_name.capitalize(), self)
+            action.triggered.connect(lambda checked=False, n=name, c=color_name: self._change_color(n, c, is_graph=True))
+            color_menu.addAction(action)
+
+        menu.exec(self.graph_list.mapToGlobal(position))
 
     def _show_context_menu(self, list_widget, position, is_mask):
         item = list_widget.itemAt(position)
@@ -1105,155 +1243,6 @@ class MainWindow(QMainWindow):
                 menu.addAction(stretch_action)
             
         menu.exec(list_widget.mapToGlobal(position))
-
-    def _show_hist_context_menu(self, position):
-        item = self.hist_list.itemAt(position)
-        if not item:
-            return
-
-        filename = item.text()
-        menu = QMenu()
-        
-        open_action = QAction("Open", self)
-        open_action.triggered.connect(lambda: self._open_hist_viewer(filename))
-        menu.addAction(open_action)
-
-        rename_action = QAction("Rename", self)
-        rename_action.triggered.connect(lambda: self._rename_hist(filename))
-        menu.addAction(rename_action)
-
-        save_csv_action = QAction("Save .csv", self)
-        save_csv_action.triggered.connect(lambda: self._save_hist_csv(filename))
-        menu.addAction(save_csv_action)
-
-        delete_action = QAction("Delete", self)
-        delete_action.triggered.connect(lambda: self._delete_hist(filename))
-        menu.addAction(delete_action)
-
-        menu.exec(self.hist_list.mapToGlobal(position))
-
-    def _hist_item_double_clicked(self, item):
-        self._open_hist_viewer(item.text())
-
-    def _open_hist_viewer(self, filename):
-        path = os.path.join(self.working_dir, "histograms", filename)
-        if os.path.exists(path):
-            from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
-            pixmap = QPixmap(path)
-            
-            view = ZoomableView()
-            view.set_pixmap(pixmap)
-            
-            subwindow = QMdiSubWindow()
-            subwindow.setWidget(view)
-            subwindow.setWindowTitle(f"Histogram View - {filename}")
-            self.mdi_area.addSubWindow(subwindow)
-            subwindow.show()
-
-    def _rename_hist(self, filename):
-        new_name, ok = QInputDialog.getText(self, "Rename Histogram", "New name:", QLineEdit.Normal, filename)
-        if ok and new_name:
-            if not new_name.endswith(".png"):
-                new_name += ".png"
-            
-            old_path = os.path.join(self.working_dir, "histograms", filename)
-            new_path = os.path.join(self.working_dir, "histograms", new_name)
-            
-            try:
-                os.rename(old_path, new_path)
-                # Also rename CSV if exists
-                old_csv = old_path.replace(".png", ".csv")
-                new_csv = new_path.replace(".png", ".csv")
-                if os.path.exists(old_csv):
-                    os.rename(old_csv, new_csv)
-                self._update_asset_list()
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Could not rename: {str(e)}")
-
-    def _save_hist_csv(self, filename):
-        csv_path = os.path.join(self.working_dir, "histograms", filename.replace(".png", ".csv"))
-        if os.path.exists(csv_path):
-            save_path, _ = QFileDialog.getSaveFileName(self, "Save CSV", filename.replace(".png", ".csv"), "CSV Files (*.csv)")
-            if save_path:
-                import shutil
-                shutil.copy(csv_path, save_path)
-        else:
-            QMessageBox.warning(self, "Warning", "CSV data not found for this histogram.")
-
-    def _delete_hist(self, filename):
-        reply = QMessageBox.question(self, "Delete", f"Are you sure you want to delete {filename}?", QMessageBox.Yes | QMessageBox.No)
-        if reply == QMessageBox.Yes:
-            path = os.path.join(self.working_dir, "histograms", filename)
-            csv_path = path.replace(".png", ".csv")
-            try:
-                os.remove(path)
-                if os.path.exists(csv_path):
-                    os.remove(csv_path)
-                self._update_asset_list()
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Could not delete: {str(e)}")
-
-    def _generate_histogram_triggered(self):
-        images = self.asset_manager.get_image_list()
-        masks = self.asset_manager.get_mask_list()
-        
-        if not images or not masks:
-            QMessageBox.warning(self, "Warning", "Need at least one image and one mask.")
-            return
-
-        dialog = HistogramDialog(images, masks, self)
-        if dialog.exec() == QDialog.Accepted:
-            image_name, mask_name = dialog.get_selection()
-            
-            image_asset, _ = self.asset_manager.get_asset_pair(image_name)
-            mask_asset = None
-            for m in self.asset_manager.masks.values():
-                if m.name == mask_name:
-                    mask_asset = m
-                    break
-            
-            if image_asset and mask_asset:
-                img_data = image_asset.data
-                mask_data = mask_asset.data
-                
-                # Apply mask (ROI)
-                roi_pixels = img_data[mask_data > 0]
-                
-                if roi_pixels.size == 0:
-                    QMessageBox.warning(self, "Warning", "The mask does not cover any pixels.")
-                    return
-
-                # Create viewer
-                viewer = HistogramViewer(roi_pixels, title=f"Histogram: {image_name} (Mask: {mask_name})")
-                subwindow = QMdiSubWindow()
-                subwindow.setWidget(viewer)
-                subwindow.setWindowTitle(f"Histogram - {image_name}")
-                self.mdi_area.addSubWindow(subwindow)
-                subwindow.show()
-
-                # Save copy to "histograms" folder
-                if self.working_dir:
-                    hist_dir = os.path.join(self.working_dir, "histograms")
-                    os.makedirs(hist_dir, exist_ok=True)
-                    
-                    base_name = f"{image_name}_{mask_name}_hist"
-                    img_save_path = os.path.join(hist_dir, f"{base_name}.png")
-                    # To avoid overwrite, maybe add timestamp or counter
-                    counter = 1
-                    while os.path.exists(img_save_path):
-                        img_save_path = os.path.join(hist_dir, f"{base_name}_{counter}.png")
-                        counter += 1
-                    
-                    viewer.figure.savefig(img_save_path)
-                    
-                    # Save .csv
-                    csv_save_path = img_save_path.replace(".png", ".csv")
-                    # Calculate histogram values for CSV
-                    hist_vals, bin_edges = np.histogram(roi_pixels.flatten(), bins=256)
-                    df = pd.DataFrame({'bin_start': bin_edges[:-1], 'count': hist_vals})
-                    df.to_csv(csv_save_path, index=False)
-                    
-                    self._update_asset_list()
 
     def _invert_selected_images(self):
         """Inverts all images that are currently selected (visible)."""
@@ -1718,7 +1707,7 @@ class MainWindow(QMainWindow):
                 success, result = self.asset_manager.rename_mask(old_name, new_name)
                 if success:
                     new_file_name, new_display_name = result
-                    self.image_handler.rename_asset(old_name, new_display_name, is_mask)
+                    self.image_handler.rename_asset(old_name, new_display_name, is_mask=True)
                     self._update_asset_list()
                     self.statusBar().showMessage(f"Renamed mask to {new_display_name}")
                 else:
@@ -1728,19 +1717,20 @@ class MainWindow(QMainWindow):
                 if image_asset:
                     image_asset.name = new_name
                     image_asset.save_project()
-                    self.image_handler.rename_asset(old_name, new_name, is_mask)
+                    self.image_handler.rename_asset(old_name, new_name, is_mask=False)
                     self._update_asset_list()
                     self.statusBar().showMessage(f"Renamed image to {new_name}")
             self.cached_composite = None
             self._refresh_viewer()
 
-    def _change_color(self, name, color_name, is_mask=False):
-        if is_mask:
-            for mask_asset in self.asset_manager.masks.values():
-                if mask_asset.name == name:
-                    mask_asset.pipeline.config["color"] = color_name
-                    mask_asset.save_project()
-                    break
+    def _change_color(self, name, color_name, is_mask=False, is_graph=False):
+        if is_graph:
+            pass # Graphs don't have persistent pipeline config yet
+        elif is_mask:
+            mask_asset = self.asset_manager.get_mask_by_name(name)
+            if mask_asset:
+                mask_asset.pipeline.config["color"] = color_name
+                mask_asset.save_project()
         else:
             image_asset, _ = self.asset_manager.get_asset_pair(name)
             if image_asset:
@@ -1749,7 +1739,11 @@ class MainWindow(QMainWindow):
 
         self.image_handler.set_asset_color(name, color_name)
         # Update tooltip in appropriate list
-        list_widget = self.mask_list if is_mask else self.image_list
+        if is_graph:
+            list_widget = self.graph_list
+        else:
+            list_widget = self.mask_list if is_mask else self.image_list
+            
         for i in range(list_widget.count()):
             item = list_widget.item(i)
             if item.text() == name:
@@ -1853,6 +1847,8 @@ class MainWindow(QMainWindow):
                 self.image_handler.toggle_visibility(name, is_mask=False)
             item.setSelected(True)
         self.cached_composite = None
+        self.viewer_subwindow.show()
+        self.viewer_subwindow.setFocus()
         self._refresh_viewer()
 
     def _select_none_images(self):
@@ -1863,6 +1859,8 @@ class MainWindow(QMainWindow):
                 self.image_handler.toggle_visibility(name, is_mask=False)
             item.setSelected(False)
         self.cached_composite = None
+        self.viewer_subwindow.show()
+        self.viewer_subwindow.setFocus()
         self._refresh_viewer()
 
     def _select_all_masks(self):
@@ -1873,6 +1871,8 @@ class MainWindow(QMainWindow):
                 self.image_handler.toggle_visibility(name, is_mask=True)
             item.setSelected(True)
         self.cached_composite = None
+        self.viewer_subwindow.show()
+        self.viewer_subwindow.setFocus()
         self._refresh_viewer()
 
     def _select_none_masks(self):
@@ -1883,6 +1883,8 @@ class MainWindow(QMainWindow):
                 self.image_handler.toggle_visibility(name, is_mask=True)
             item.setSelected(False)
         self.cached_composite = None
+        self.viewer_subwindow.show()
+        self.viewer_subwindow.setFocus()
         self._refresh_viewer()
 
     def _asset_clicked(self, item):
@@ -1893,6 +1895,8 @@ class MainWindow(QMainWindow):
         # Visually reflect selection state
         item.setSelected(self.image_handler.is_visible(name, is_mask=False))
         
+        self.viewer_subwindow.show()
+        self.viewer_subwindow.setFocus()
         self._refresh_viewer()
 
     def _mask_clicked(self, item):
@@ -1903,6 +1907,8 @@ class MainWindow(QMainWindow):
         # Visually reflect selection state
         item.setSelected(self.image_handler.is_visible(name, is_mask=True))
         
+        self.viewer_subwindow.show()
+        self.viewer_subwindow.setFocus()
         self._refresh_viewer()
 
     def keyPressEvent(self, event):
@@ -1939,24 +1945,219 @@ class MainWindow(QMainWindow):
         
         # Update current mask opacities in pipeline
         for name in self.image_handler.visible_masks:
-            for mask_asset in self.asset_manager.masks.values():
-                if mask_asset.name == name:
-                    mask_asset.pipeline.config["opacity"] = opacity
-                    mask_asset.save_project()
-                    break
+            mask_asset = self.asset_manager.get_mask_by_name(name)
+            if mask_asset:
+                mask_asset.pipeline.config["opacity"] = opacity
+                mask_asset.save_project()
 
         self.cached_composite = None
         self._refresh_viewer()
 
     def _refresh_viewer(self):
         if self.cached_composite is None:
-            composite_qimg = self.image_handler.render_composite(self.asset_manager)
+            composite_qimg = self.image_handler.render_composite(self.asset_manager, graphs=self.graphs)
             if composite_qimg:
                 self.cached_composite = QPixmap.fromImage(composite_qimg)
             else:
                 self.cached_composite = None
 
         self.viewer_view.set_pixmap(self.cached_composite)
+        self.refresh_graph_view()
+
+    def refresh_graph_view(self):
+        if not hasattr(self, 'graph_view'):
+            return
+
+        visible_hists = sorted(list(self.image_handler.visible_graphs))
+        if not visible_hists:
+            self.graph_view.set_pixmap(None)
+            return
+
+        # Check for bivariate graphs first
+        bivariate_hists = [name for name in visible_hists if name in self.graphs and self.graphs[name].get('type') == 'bivariate']
+        
+        if bivariate_hists:
+            # We will show only the first selected bivariate graph for now
+            name = bivariate_hists[0]
+            hist_info = self.graphs[name]
+            
+            color_name = self.image_handler.get_asset_color(name)
+            color_rgb = self.image_handler.COLORS.get(color_name, (1, 1, 1))
+            from PySide6.QtGui import QColor
+            color = QColor(int(color_rgb[0]*255), int(color_rgb[1]*255), int(color_rgb[2]*255))
+            
+            w = max(400, self.graph_view.width())
+            h = max(300, self.graph_view.height())
+
+            if 'image1_data' in hist_info and 'image2_data' in hist_info and 'mask_data' in hist_info:
+                img1_data = hist_info['image1_data']
+                img2_data = hist_info['image2_data']
+                mask_data = hist_info['mask_data']
+                
+                # Apply mask to images
+                m1 = np.zeros_like(img1_data)
+                m2 = np.zeros_like(img2_data)
+                m1[mask_data > 0] = img1_data[mask_data > 0]
+                m2[mask_data > 0] = img2_data[mask_data > 0]
+                
+                from seaborn_utils import create_bivariate_kdeplot_pixmap
+                names = [hist_info.get('image1_name', 'Img1'), hist_info.get('image2_name', 'Img2')]
+                pixmap = create_bivariate_kdeplot_pixmap([m1, m2], [color, color], w, h, names=names)
+                self.graph_view.set_pixmap(pixmap)
+            elif 'image1_values' in hist_info and 'image2_values' in hist_info:
+                # Use pre-calculated values
+                from seaborn_utils import create_bivariate_kdeplot_pixmap
+                # We need to simulate the masked images for the existing function 
+                # or modify the function. Let's try to simulate.
+                # Actually create_bivariate_kdeplot_pixmap calls get_bivariate_kde_data 
+                # which does the sampling. If we already have samples...
+                
+                # I'll add a check in seaborn_utils.py to handle pre-sampled data too if possible.
+                # For now, let's just use a placeholder or message if not easily possible.
+                # Wait, I can just use the sampled values to "reconstruct" m1, m2 if I wanted, 
+                # but better to update seaborn_utils.
+                
+                # Let's assume I'll update seaborn_utils.py to take these values.
+                names = [hist_info.get('image1', 'Img1'), hist_info.get('image2', 'Img2')]
+                # Pass values as a special dict
+                pixmap = create_bivariate_kdeplot_pixmap(
+                    {'x': hist_info['image1_values'], 'y': hist_info['image2_values']}, 
+                    [color, color], w, h, names=names
+                )
+                self.graph_view.set_pixmap(pixmap)
+            return
+
+        # Check for joint KDE graphs
+        joint_kde_hists = [name for name in visible_hists if name in self.graphs and self.graphs[name].get('type') == 'joint_kde']
+        
+        if joint_kde_hists:
+            # Show only the first selected joint KDE graph
+            name = joint_kde_hists[0]
+            hist_info = self.graphs[name]
+            
+            color_name = self.image_handler.get_asset_color(name)
+            color_rgb = self.image_handler.COLORS.get(color_name, (1, 1, 1))
+            from PySide6.QtGui import QColor
+            color = QColor(int(color_rgb[0]*255), int(color_rgb[1]*255), int(color_rgb[2]*255))
+            
+            w = max(400, self.graph_view.width())
+            h = max(300, self.graph_view.height())
+
+            if 'image1_data' in hist_info and 'image2_data' in hist_info and 'mask_data' in hist_info:
+                img1_data = hist_info['image1_data']
+                img2_data = hist_info['image2_data']
+                mask_data = hist_info['mask_data']
+                
+                # Apply mask to images
+                m1 = np.zeros_like(img1_data)
+                m2 = np.zeros_like(img2_data)
+                m1[mask_data > 0] = img1_data[mask_data > 0]
+                m2[mask_data > 0] = img2_data[mask_data > 0]
+                
+                from seaborn_utils import create_joint_kdeplot_pixmap
+                names = [hist_info.get('image1_name', 'Img1'), hist_info.get('image2_name', 'Img2')]
+                pixmap = create_joint_kdeplot_pixmap([m1, m2], [color, color], w, h, names=names)
+                self.graph_view.set_pixmap(pixmap)
+            elif 'image1_values' in hist_info and 'image2_values' in hist_info:
+                from seaborn_utils import create_joint_kdeplot_pixmap
+                names = [hist_info.get('image1', 'Img1'), hist_info.get('image2', 'Img2')]
+                pixmap = create_joint_kdeplot_pixmap(
+                    {'x': hist_info['image1_values'], 'y': hist_info['image2_values']}, 
+                    [color, color], w, h, names=names
+                )
+                self.graph_view.set_pixmap(pixmap)
+            return
+
+        # Check for ridge plots
+        ridge_hists = [name for name in visible_hists if name in self.graphs and self.graphs[name].get('type') == 'ridge']
+
+        if ridge_hists:
+            # Show only the first selected ridge plot
+            name = ridge_hists[0]
+            hist_info = self.graphs[name]
+            
+            from PySide6.QtGui import QColor
+            w = max(400, self.graph_view.width())
+            h = max(300, self.graph_view.height())
+            from seaborn_utils import create_ridgeplot_pixmap
+
+            if 'image_datasets' in hist_info and 'mask_data' in hist_info:
+                image_datasets = hist_info['image_datasets']
+                mask_data = hist_info['mask_data']
+                image_names = hist_info['image_names']
+
+                masked_images = []
+                colors = []
+                for i, img_data in enumerate(image_datasets):
+                    m = np.zeros_like(img_data)
+                    m[mask_data > 0] = img_data[mask_data > 0]
+                    masked_images.append(m)
+                    
+                    # Try to get color for original image, else use graph color
+                    img_name = image_names[i]
+                    color_name = self.image_handler.get_asset_color(img_name)
+                    color_rgb = self.image_handler.COLORS.get(color_name, (1, 1, 1))
+                    colors.append(QColor(int(color_rgb[0]*255), int(color_rgb[1]*255), int(color_rgb[2]*255)))
+
+                pixmap = create_ridgeplot_pixmap(masked_images, colors, w, h, names=image_names)
+                self.graph_view.set_pixmap(pixmap)
+            elif 'image_datasets_values' in hist_info:
+                # Use pre-calculated values for each image in the ridge plot
+                image_names = hist_info.get('image_names', [])
+                datasets_values = hist_info['image_datasets_values'] # list of lists
+                
+                colors = []
+                for img_name in image_names:
+                    color_name = self.image_handler.get_asset_color(img_name)
+                    color_rgb = self.image_handler.COLORS.get(color_name, (1, 1, 1))
+                    colors.append(QColor(int(color_rgb[0]*255), int(color_rgb[1]*255), int(color_rgb[2]*255)))
+                
+                # We need to update create_ridgeplot_pixmap to handle pre-sampled values
+                pixmap = create_ridgeplot_pixmap(datasets_values, colors, w, h, names=image_names)
+                self.graph_view.set_pixmap(pixmap)
+            return
+
+        datasets = []
+        colors = []
+        labels = []
+        
+        from PySide6.QtGui import QColor
+        
+        for name in visible_hists:
+            if name in self.graphs:
+                hist_info = self.graphs[name]
+                if hist_info.get('type') in ['bivariate', 'joint_kde', 'ridge']:
+                    continue # Already handled or skipped if multiple
+                
+                if 'image_data' in hist_info and 'mask_data' in hist_info:
+                    img_data = hist_info['image_data']
+                    mask_data = hist_info['mask_data']
+                    # Apply mask and flatten
+                    data = img_data[mask_data > 0].flatten()
+                    datasets.append(data)
+                elif 'counts' in hist_info and 'bins' in hist_info:
+                    # Use pre-calculated data
+                    datasets.append({
+                        'counts': hist_info['counts'],
+                        'bins': hist_info['bins']
+                    })
+                else:
+                    continue
+                
+                color_name = self.image_handler.get_asset_color(name)
+                color_rgb = self.image_handler.COLORS.get(color_name, (1, 1, 1))
+                colors.append(QColor(int(color_rgb[0]*255), int(color_rgb[1]*255), int(color_rgb[2]*255)))
+                labels.append(name)
+
+        if datasets:
+            from seaborn_utils import create_multi_graph_plot_pixmap
+            # Use current widget size for plotting
+            w = max(400, self.graph_view.width())
+            h = max(300, self.graph_view.height())
+            pixmap = create_multi_graph_plot_pixmap(datasets, colors, labels, w, h)
+            self.graph_view.set_pixmap(pixmap)
+        else:
+            self.graph_view.set_pixmap(None)
 
     def _crop_all(self):
         # We need dimensions to show defaults. Let's pick the first image if any.
@@ -2049,15 +2250,7 @@ class MainWindow(QMainWindow):
 
         merged_data = None
         for name in visible_masks:
-            mask_asset = None
-            # Find the actual asset by its name or file_name
-            if name in self.asset_manager.masks:
-                mask_asset = self.asset_manager.masks[name]
-            else:
-                for m in self.asset_manager.masks.values():
-                    if m.name == name:
-                        mask_asset = m
-                        break
+            mask_asset = self.asset_manager.get_mask_by_name(name)
             
             if not mask_asset:
                 continue
@@ -2085,5 +2278,628 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.critical(self, "Merge Failed", "Could not load data for selected masks.")
 
+    def _create_graph_triggered(self):
+        """Creates graphs for selected images based on one selected mask."""
+        selected_images = sorted(list(self.image_handler.visible_assets))
+        selected_masks = sorted(list(self.image_handler.visible_masks))
+
+        if not selected_images:
+            QMessageBox.warning(self, "Selection Error", "Please select at least one image.")
+            return
+
+        if len(selected_masks) != 1:
+            QMessageBox.warning(self, "Selection Error", "Please select exactly one mask to use as ROI.")
+            return
+
+        mask_name = selected_masks[0]
+        mask_asset = self.asset_manager.get_mask_by_name(mask_name)
+        
+        if not mask_asset:
+            QMessageBox.critical(self, "Error", f"Could not find mask asset for '{mask_name}'")
+            return
+
+        mask_data = mask_asset.data
+        if mask_data is None:
+            QMessageBox.critical(self, "Error", f"Could not load data for mask '{mask_name}'")
+            return
+
+        new_hists = []
+        for img_name in selected_images:
+            image_asset, _ = self.asset_manager.get_asset_pair(img_name)
+            if not image_asset:
+                continue
+            
+            image_data = image_asset.get_rendered_data(for_clustering=False)
+            if image_data is None:
+                continue
+
+            # Ensure shapes match
+            if image_data.shape[:2] != mask_data.shape[:2]:
+                QMessageBox.warning(self, "Shape Mismatch", f"Image '{img_name}' shape {image_data.shape[:2]} does not match mask '{mask_name}' shape {mask_data.shape[:2]}. Skipping.")
+                continue
+
+            hist_name = f"Hist_{img_name}_{mask_name}"
+            # Ensure unique name
+            base_hist_name = hist_name
+            counter = 1
+            while hist_name in self.graphs:
+                hist_name = f"{base_hist_name}_{counter}"
+                counter += 1
+
+            self.graphs[hist_name] = {
+                'image_data': image_data,
+                'mask_data': mask_data,
+                'orig_image_name': img_name,
+                'orig_mask_name': mask_name
+            }
+            # Set default color to match image if possible, or just magenta
+            color = self.image_handler.get_asset_color(img_name)
+            self.image_handler.set_asset_color(hist_name, color)
+            self.image_handler.toggle_visibility(hist_name, is_graph=True)
+            new_hists.append(hist_name)
+
+        if new_hists:
+            # Export new graphs as JSON
+            export_data = []
+            for h_name in new_hists:
+                h_info = self.graphs[h_name]
+                img_data = h_info['image_data']
+                msk_data = h_info['mask_data']
+                
+                # Apply mask and calculate histogram
+                masked_pixels = img_data[msk_data > 0].flatten()
+                if len(masked_pixels) > 0:
+                    counts, bin_edges = np.histogram(masked_pixels, bins=256, range=(0, 256))
+                    export_data.append({
+                        "name": h_name,
+                        "image": h_info['orig_image_name'],
+                        "mask": h_info['orig_mask_name'],
+                        "counts": counts.tolist(),
+                        "bins": bin_edges.tolist()
+                    })
+
+            if export_data:
+                if self.working_dir:
+                    hist_dir = os.path.join(self.working_dir, "Graphs")
+                else:
+                    hist_dir = "Graphs"
+                    
+                if not os.path.exists(hist_dir):
+                    os.makedirs(hist_dir)
+                
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"graphs_{timestamp}.json"
+                file_path = os.path.join(hist_dir, filename)
+                
+                with open(file_path, 'w') as f:
+                    json.dump(export_data, f, indent=4)
+                
+                print(f"Exported {len(export_data)} graphs to {file_path}")
+
+            self._update_asset_list()
+            self.cached_composite = None
+            self.graph_subwindow.show()
+            self.graph_subwindow.setFocus()
+            self._refresh_viewer()
+            self.statusBar().showMessage(f"Created {len(new_hists)} graph(s)")
+        else:
+            QMessageBox.warning(self, "No Graphs Created", "No graphs were created. Check image and mask selection.")
+
+    def _create_bivariate_graph_triggered(self):
+        """Creates a bivariate graph entry for two selected images based on one selected mask."""
+        selected_images = sorted(list(self.image_handler.visible_assets))
+        selected_masks = sorted(list(self.image_handler.visible_masks))
+
+        if len(selected_images) != 2:
+            QMessageBox.warning(self, "Selection Error", "Please select exactly two images for a bivariate graph.")
+            return
+
+        if len(selected_masks) != 1:
+            QMessageBox.warning(self, "Selection Error", "Please select exactly one mask to use as ROI.")
+            return
+
+        mask_name = selected_masks[0]
+        mask_asset = self.asset_manager.get_mask_by_name(mask_name)
+        
+        if not mask_asset:
+            QMessageBox.critical(self, "Error", f"Could not find mask asset for '{mask_name}'")
+            return
+
+        mask_data = mask_asset.data
+        if mask_data is None:
+            QMessageBox.critical(self, "Error", f"Could not load data for mask '{mask_name}'")
+            return
+
+        img1_name = selected_images[0]
+        img2_name = selected_images[1]
+        
+        image1_asset, _ = self.asset_manager.get_asset_pair(img1_name)
+        image2_asset, _ = self.asset_manager.get_asset_pair(img2_name)
+        
+        if not image1_asset or not image2_asset:
+            QMessageBox.critical(self, "Error", "Could not find asset data for selected images.")
+            return
+            
+        img1_data = image1_asset.get_rendered_data(for_clustering=False)
+        img2_data = image2_asset.get_rendered_data(for_clustering=False)
+        
+        if img1_data is None or img2_data is None:
+            QMessageBox.critical(self, "Error", "Could not load data for selected images.")
+            return
+
+        # Ensure shapes match
+        if img1_data.shape[:2] != mask_data.shape[:2] or img2_data.shape[:2] != mask_data.shape[:2]:
+            QMessageBox.warning(self, "Shape Mismatch", f"Image shapes do not match mask '{mask_name}' shape {mask_data.shape[:2]}.")
+            return
+
+        hist_name = f"Bivariate_{img1_name}_{img2_name}_{mask_name}"
+        # Ensure unique name
+        base_hist_name = hist_name
+        counter = 1
+        while hist_name in self.graphs:
+            hist_name = f"{base_hist_name}_{counter}"
+            counter += 1
+
+        self.graphs[hist_name] = {
+            'type': 'bivariate',
+            'image1_data': img1_data,
+            'image2_data': img2_data,
+            'mask_data': mask_data,
+            'image1_name': img1_name,
+            'image2_name': img2_name,
+            'orig_mask_name': mask_name
+        }
+        
+        self.image_handler.set_asset_color(hist_name, "magenta")
+        self.image_handler.toggle_visibility(hist_name, is_graph=True)
+        
+        # Export bivariate graph as JSON
+        export_data = {
+            "name": hist_name,
+            "type": "bivariate",
+            "image1": img1_name,
+            "image2": img2_name,
+            "mask": mask_name,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Get sampled data points for the bivariate plot
+        from seaborn_utils import get_bivariate_kde_data
+        
+        # Apply mask
+        m1 = np.zeros_like(img1_data)
+        m2 = np.zeros_like(img2_data)
+        m1[mask_data > 0] = img1_data[mask_data > 0]
+        m2[mask_data > 0] = img2_data[mask_data > 0]
+        
+        kde_data = get_bivariate_kde_data([m1, m2])
+        if kde_data:
+            x_vals, y_vals = kde_data
+            export_data["image1_values"] = x_vals.tolist()
+            export_data["image2_values"] = y_vals.tolist()
+            export_data["sample_size"] = len(x_vals)
+
+            if self.working_dir:
+                hist_dir = os.path.join(self.working_dir, "Graphs")
+            else:
+                hist_dir = "Graphs"
+                
+            if not os.path.exists(hist_dir):
+                os.makedirs(hist_dir)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"bivariate_graph_{timestamp}.json"
+            file_path = os.path.join(hist_dir, filename)
+            
+            with open(file_path, 'w') as f:
+                json.dump(export_data, f, indent=4)
+            
+            print(f"Exported bivariate graph to {file_path}")
+
+        self._update_asset_list()
+        self.cached_composite = None
+        self.graph_subwindow.show()
+        self.graph_subwindow.setFocus()
+        self._refresh_viewer()
+        self.statusBar().showMessage(f"Created bivariate graph '{hist_name}'")
+
+    def _create_joint_kde_triggered(self):
+        """Creates a joint KDE graph entry for two selected images based on one selected mask."""
+        selected_images = sorted(list(self.image_handler.visible_assets))
+        selected_masks = sorted(list(self.image_handler.visible_masks))
+
+        if len(selected_images) != 2:
+            QMessageBox.warning(self, "Selection Error", "Please select exactly two images for a joint KDE graph.")
+            return
+
+        if len(selected_masks) != 1:
+            QMessageBox.warning(self, "Selection Error", "Please select exactly one mask to use as ROI.")
+            return
+
+        mask_name = selected_masks[0]
+        mask_asset = self.asset_manager.get_mask_by_name(mask_name)
+        
+        if not mask_asset:
+            QMessageBox.critical(self, "Error", f"Could not find mask asset for '{mask_name}'")
+            return
+
+        mask_data = mask_asset.data
+        if mask_data is None:
+            QMessageBox.critical(self, "Error", f"Could not load data for mask '{mask_name}'")
+            return
+
+        img1_name = selected_images[0]
+        img2_name = selected_images[1]
+        
+        image1_asset, _ = self.asset_manager.get_asset_pair(img1_name)
+        image2_asset, _ = self.asset_manager.get_asset_pair(img2_name)
+        
+        if not image1_asset or not image2_asset:
+            QMessageBox.critical(self, "Error", "Could not find asset data for selected images.")
+            return
+            
+        img1_data = image1_asset.get_rendered_data(for_clustering=False)
+        img2_data = image2_asset.get_rendered_data(for_clustering=False)
+        
+        if img1_data is None or img2_data is None:
+            QMessageBox.critical(self, "Error", "Could not load data for selected images.")
+            return
+
+        # Ensure shapes match
+        if img1_data.shape[:2] != mask_data.shape[:2] or img2_data.shape[:2] != mask_data.shape[:2]:
+            QMessageBox.warning(self, "Shape Mismatch", f"Image shapes do not match mask '{mask_name}' shape {mask_data.shape[:2]}.")
+            return
+
+        hist_name = f"JointKDE_{img1_name}_{img2_name}_{mask_name}"
+        # Ensure unique name
+        base_hist_name = hist_name
+        counter = 1
+        while hist_name in self.graphs:
+            hist_name = f"{base_hist_name}_{counter}"
+            counter += 1
+
+        self.graphs[hist_name] = {
+            'type': 'joint_kde',
+            'image1_data': img1_data,
+            'image2_data': img2_data,
+            'mask_data': mask_data,
+            'image1_name': img1_name,
+            'image2_name': img2_name,
+            'orig_mask_name': mask_name
+        }
+        
+        self.image_handler.set_asset_color(hist_name, "cyan")
+        self.image_handler.toggle_visibility(hist_name, is_graph=True)
+        
+        # Export joint KDE graph as JSON
+        export_data = {
+            "name": hist_name,
+            "type": "joint_kde",
+            "image1": img1_name,
+            "image2": img2_name,
+            "mask": mask_name,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Get sampled data points for the joint KDE plot
+        from seaborn_utils import get_bivariate_kde_data
+        
+        # Apply mask
+        m1 = np.zeros_like(img1_data)
+        m2 = np.zeros_like(img2_data)
+        m1[mask_data > 0] = img1_data[mask_data > 0]
+        m2[mask_data > 0] = img2_data[mask_data > 0]
+        
+        kde_data = get_bivariate_kde_data([m1, m2])
+        if kde_data:
+            x_vals, y_vals = kde_data
+            export_data["image1_values"] = x_vals.tolist()
+            export_data["image2_values"] = y_vals.tolist()
+            export_data["sample_size"] = len(x_vals)
+
+            if self.working_dir:
+                hist_dir = os.path.join(self.working_dir, "Graphs")
+            else:
+                hist_dir = "Graphs"
+                
+            if not os.path.exists(hist_dir):
+                os.makedirs(hist_dir)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"joint_kde_graph_{timestamp}.json"
+            file_path = os.path.join(hist_dir, filename)
+            
+            with open(file_path, 'w') as f:
+                json.dump(export_data, f, indent=4)
+            
+            print(f"Exported joint KDE graph to {file_path}")
+
+        self._update_asset_list()
+        self.cached_composite = None
+        self.graph_subwindow.show()
+        self.graph_subwindow.setFocus()
+        self._refresh_viewer()
+        self.statusBar().showMessage(f"Created Joint KDE graph")
+
+    def _create_ridgeplot_triggered(self):
+        """Creates a ridge plot entry for selected images based on one selected mask."""
+        selected_images = sorted(list(self.image_handler.visible_assets))
+        selected_masks = sorted(list(self.image_handler.visible_masks))
+
+        if len(selected_images) < 2:
+            QMessageBox.warning(self, "Selection Error", "Please select at least two images for a ridge plot.")
+            return
+
+        if len(selected_masks) != 1:
+            QMessageBox.warning(self, "Selection Error", "Please select exactly one mask to use as ROI.")
+            return
+
+        mask_name = selected_masks[0]
+        mask_asset = self.asset_manager.get_mask_by_name(mask_name)
+        
+        if not mask_asset:
+            QMessageBox.critical(self, "Error", f"Could not find mask asset for '{mask_name}'")
+            return
+
+        mask_data = mask_asset.data
+        if mask_data is None:
+            QMessageBox.critical(self, "Error", f"Could not load data for mask '{mask_name}'")
+            return
+
+        image_datasets = []
+        image_names = []
+        
+        for img_name in selected_images:
+            image_asset, _ = self.asset_manager.get_asset_pair(img_name)
+            if not image_asset:
+                continue
+            
+            img_data = image_asset.get_rendered_data(for_clustering=False)
+            if img_data is None:
+                continue
+                
+            if img_data.shape[:2] != mask_data.shape[:2]:
+                QMessageBox.warning(self, "Shape Mismatch", f"Image '{img_name}' shape does not match mask shape. Skipping.")
+                continue
+                
+            image_datasets.append(img_data)
+            image_names.append(img_name)
+
+        if len(image_datasets) < 2:
+            QMessageBox.warning(self, "Selection Error", "Not enough images with matching shapes were found.")
+            return
+
+        hist_name = f"Ridge_{'_'.join(image_names)}_{mask_name}"
+        if len(hist_name) > 100: # Truncate if too long
+             hist_name = f"Ridge_{len(image_names)}imgs_{mask_name}"
+             
+        # Ensure unique name
+        base_hist_name = hist_name
+        counter = 1
+        while hist_name in self.graphs:
+            hist_name = f"{base_hist_name}_{counter}"
+            counter += 1
+
+        self.graphs[hist_name] = {
+            'type': 'ridge',
+            'image_datasets': image_datasets,
+            'mask_data': mask_data,
+            'image_names': image_names,
+            'orig_mask_name': mask_name
+        }
+        
+        self.image_handler.set_asset_color(hist_name, "magenta")
+        self.image_handler.toggle_visibility(hist_name, is_graph=True)
+        
+        # Export ridge plot as JSON
+        export_data = {
+            "name": hist_name,
+            "type": "ridge",
+            "images": image_names,
+            "mask": mask_name,
+            "timestamp": datetime.now().isoformat(),
+            "datasets": []
+        }
+        
+        for i, img_data in enumerate(image_datasets):
+            masked_pixels = img_data[mask_data > 0].flatten()
+            if len(masked_pixels) > 0:
+                if len(masked_pixels) > 10000:
+                    indices = np.random.choice(len(masked_pixels), 10000, replace=False)
+                    sampled_pixels = masked_pixels[indices]
+                else:
+                    sampled_pixels = masked_pixels
+                    
+                export_data["datasets"].append({
+                    "image": image_names[i],
+                    "values": sampled_pixels.tolist()
+                })
+
+        if self.working_dir:
+            hist_dir = os.path.join(self.working_dir, "Graphs")
+        else:
+            hist_dir = "Graphs"
+            
+        if not os.path.exists(hist_dir):
+            os.makedirs(hist_dir)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"ridge_plot_{timestamp}.json"
+        file_path = os.path.join(hist_dir, filename)
+        
+        with open(file_path, 'w') as f:
+            json.dump(export_data, f, indent=4)
+        
+        print(f"Exported ridge plot to {file_path}")
+
+        self._update_asset_list()
+        self.cached_composite = None
+        self.graph_subwindow.show()
+        self.graph_subwindow.setFocus()
+        self._refresh_viewer()
+        self.statusBar().showMessage(f"Created Ridge Plot")
+
+    def _rename_graph(self, old_name):
+        new_name, ok = QInputDialog.getText(self, "Rename Graph", "Enter new name:", text=old_name)
+        if ok and new_name and new_name != old_name:
+            if new_name in self.graphs:
+                QMessageBox.warning(self, "Invalid Name", f"A graph with name '{new_name}' already exists.")
+                return
+            
+            self.graphs[new_name] = self.graphs.pop(old_name)
+            self.image_handler.rename_asset(old_name, new_name, is_graph=True)
+            self._update_asset_list()
+            self.statusBar().showMessage(f"Renamed graph to {new_name}")
+            self.cached_composite = None
+            self._refresh_viewer()
+
+    def _save_graph_csv(self, name):
+        if name not in self.graphs:
+            return
+            
+        hist_info = self.graphs[name]
+        
+        if hist_info.get('type') == 'bivariate':
+            # Bivariate data export to CSV - maybe as X, Y points?
+            # Or just warn that it's not supported for bivariate yet
+            QMessageBox.information(self, "Not Supported", "CSV export for bivariate graphs is not yet implemented.")
+            return
+
+        image_data = hist_info['image_data']
+        mask_data = hist_info['mask_data']
+        
+        # Apply mask
+        data = image_data[mask_data > 0].flatten()
+        
+        if len(data) == 0:
+            QMessageBox.warning(self, "No Data", "No data points found within the mask for this graph.")
+            return
+
+        # Calculate histogram
+        hist, bins = np.histogram(data, bins=256, range=(0, 256))
+        
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save Graph CSV", f"{name}.csv", "CSV Files (*.csv)")
+        if file_path:
+            try:
+                import pandas as pd
+                df = pd.DataFrame({
+                    'Intensity': bins[:-1],
+                    'Count': hist
+                })
+                df.to_csv(file_path, index=False)
+                QMessageBox.information(self, "Save Complete", f"Successfully saved graph data to {file_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Save Error", f"An error occurred while saving CSV: {str(e)}")
+
+    def _save_group_graph_csv(self):
+        """Exports all visible graphs into a single .csv file."""
+        visible_hists = sorted(list(self.image_handler.visible_graphs))
+        if not visible_hists:
+            QMessageBox.warning(self, "No Graphs Visible", "Please toggle visibility for at least one graph to export.")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save Group Graph CSV", "grouped_graphs.csv", "CSV Files (*.csv)")
+        if not file_path:
+            return
+
+        try:
+            import pandas as pd
+            # Use dictionary to build DataFrame
+            data_dict = {'Intensity': np.arange(256)}
+            
+            for name in visible_hists:
+                if name not in self.graphs:
+                    continue
+                
+                hist_info = self.graphs[name]
+                if hist_info.get('type') == 'bivariate':
+                    continue # Skip bivariate in grouped CSV for now
+                
+                image_data = hist_info['image_data']
+                mask_data = hist_info['mask_data']
+                
+                # Apply mask to get data
+                data = image_data[mask_data > 0].flatten()
+                
+                if len(data) == 0:
+                    hist = np.zeros(256, dtype=int)
+                else:
+                    # Calculate histogram with 256 bins for intensities 0-255
+                    hist, _ = np.histogram(data, bins=256, range=(0, 256))
+                
+                data_dict[name] = hist
+                
+            df = pd.DataFrame(data_dict)
+            df.to_csv(file_path, index=False)
+            QMessageBox.information(self, "Save Complete", f"Successfully saved grouped graph data to {file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"An error occurred while saving grouped CSV: {str(e)}")
+
+    def _graph_clicked(self, item):
+        name = item.text()
+        self.image_handler.toggle_visibility(name, is_graph=True)
+        self.cached_composite = None
+        self.graph_subwindow.show()
+        self.graph_subwindow.setFocus()
+        self._refresh_viewer()
+
+    def _select_all_graphs(self):
+        for i in range(self.graph_list.count()):
+            item = self.graph_list.item(i)
+            name = item.text()
+            if not self.image_handler.is_visible(name, is_graph=True):
+                self.image_handler.toggle_visibility(name, is_graph=True)
+            item.setSelected(True)
+        self.cached_composite = None
+        self.graph_subwindow.show()
+        self.graph_subwindow.setFocus()
+        self._refresh_viewer()
+
+    def _select_none_graphs(self):
+        for i in range(self.graph_list.count()):
+            item = self.graph_list.item(i)
+            name = item.text()
+            if self.image_handler.is_visible(name, is_graph=True):
+                self.image_handler.toggle_visibility(name, is_graph=True)
+            item.setSelected(False)
+        self.cached_composite = None
+        self.graph_subwindow.show()
+        self.graph_subwindow.setFocus()
+        self._refresh_viewer()
+
     def _create_status_bar(self):
         self.statusBar().showMessage("Ready")
+
+class GraphViewer(QGraphicsView):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setRenderHint(QPainter.Antialiasing)
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setBackgroundRole(QPalette.NoRole)
+        self.setFrameShape(QFrame.NoFrame)
+
+        self.scene = QGraphicsScene(self)
+        self.setScene(self.scene)
+
+        self.pixmap_item = QGraphicsPixmapItem()
+        self.scene.addItem(self.pixmap_item)
+
+    def set_pixmap(self, pixmap):
+        if pixmap:
+            self.pixmap_item.setPixmap(pixmap)
+            self.scene.setSceneRect(QRectF(pixmap.rect()))
+            self.viewport().update()
+        else:
+            self.pixmap_item.setPixmap(QPixmap())
+            self.scene.setSceneRect(QRectF())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # We might want to trigger a re-render here if we want the plot to scale with window
+        # For now, just call parent.refresh_graph_view() if parent has it
+        parent = self.parent()
+        while parent and not hasattr(parent, 'refresh_graph_view'):
+            parent = parent.parent()
+        if parent:
+            parent.refresh_graph_view()

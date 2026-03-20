@@ -26,6 +26,7 @@ class ImageDisplayHandler:
         self.asset_colors = {}  # asset_name -> color_name
         self.visible_assets = set() # set of image asset names
         self.visible_masks = set() # set of mask asset names
+        self.visible_graphs = set() # set of graph names
         self.mask_opacity = 0.5 # default opacity for masks
 
     def get_default_color(self, name):
@@ -35,6 +36,8 @@ class ImageDisplayHandler:
             return "green"
         elif "_E." in name:
             return "blue"
+        elif ".csv" in name.lower():
+            return "magenta"
         elif ".bmp" in name.lower() or ".png" in name.lower():
             return "yellow" # masks are often yellow by default
         return "grayscale" # default fallback
@@ -48,19 +51,30 @@ class ImageDisplayHandler:
             self.asset_colors[name] = self.get_default_color(name)
         return self.asset_colors[name]
 
-    def toggle_visibility(self, name, is_mask=False):
-        target_set = self.visible_masks if is_mask else self.visible_assets
+    def toggle_visibility(self, name, is_mask=False, is_graph=False):
+        if is_graph:
+            target_set = self.visible_graphs
+        else:
+            target_set = self.visible_masks if is_mask else self.visible_assets
+            
         if name in target_set:
             target_set.remove(name)
         else:
             target_set.add(name)
 
-    def is_visible(self, name, is_mask=False):
-        target_set = self.visible_masks if is_mask else self.visible_assets
+    def is_visible(self, name, is_mask=False, is_graph=False):
+        if is_graph:
+            target_set = self.visible_graphs
+        else:
+            target_set = self.visible_masks if is_mask else self.visible_assets
         return name in target_set
 
-    def rename_asset(self, old_name, new_name, is_mask=False):
-        target_set = self.visible_masks if is_mask else self.visible_assets
+    def rename_asset(self, old_name, new_name, is_mask=False, is_graph=False):
+        if is_graph:
+            target_set = self.visible_graphs
+        else:
+            target_set = self.visible_masks if is_mask else self.visible_assets
+            
         if old_name in target_set:
             target_set.remove(old_name)
             target_set.add(new_name)
@@ -68,15 +82,19 @@ class ImageDisplayHandler:
         if old_name in self.asset_colors:
             self.asset_colors[new_name] = self.asset_colors.pop(old_name)
 
-    def remove_asset(self, name, is_mask=False):
-        target_set = self.visible_masks if is_mask else self.visible_assets
+    def remove_asset(self, name, is_mask=False, is_graph=False):
+        if is_graph:
+            target_set = self.visible_graphs
+        else:
+            target_set = self.visible_masks if is_mask else self.visible_assets
+            
         if name in target_set:
             target_set.remove(name)
         
         if name in self.asset_colors:
             del self.asset_colors[name]
 
-    def render_composite(self, asset_manager):
+    def render_composite(self, asset_manager, graphs=None):
         num_images = len(self.visible_assets)
         num_masks = len(self.visible_masks)
         
@@ -132,7 +150,7 @@ class ImageDisplayHandler:
         if composite_rgb is None and num_masks > 0:
             # We need the shape of the masks
             for name in self.visible_masks:
-                mask_asset = asset_manager.masks.get(name)
+                mask_asset = asset_manager.get_mask_by_name(name)
                 if mask_asset:
                     data = mask_asset.get_rendered_data(for_clustering=False)
                     if data is not None:
@@ -143,7 +161,7 @@ class ImageDisplayHandler:
         # Render masks
         if composite_rgb is not None:
             for name in sorted(self.visible_masks):
-                mask_asset = asset_manager.masks.get(name)
+                mask_asset = asset_manager.get_mask_by_name(name)
                 if not mask_asset:
                     continue
                 
@@ -175,10 +193,11 @@ class ImageDisplayHandler:
         # Clip values to [0, 1] before conversion to 8-bit
         composite_rgb = np.clip(composite_rgb, 0, 1)
 
-        # Convert to 8-bit QImage
-        display_img = (composite_rgb * 255).astype(np.uint8)
+        display_img = np.ascontiguousarray((composite_rgb * 255).astype(np.uint8))
         height, width, _ = display_img.shape
-        return QImage(display_img.data, width, height, width * 3, QImage.Format_RGB888)
+        qimg = QImage(display_img.data, width, height, display_img.strides[0], QImage.Format_RGB888)
+        qimg.ndarray = display_img
+        return qimg.copy()
 
     def save_visible(self, asset_manager, output_dir, filename, image_format):
         """
@@ -218,7 +237,7 @@ class ImageDisplayHandler:
             if image_asset:
                 metadata["visible_images"].append(self._get_asset_metadata(image_asset))
         for name in sorted(self.visible_masks):
-            mask_asset = asset_manager.masks.get(name)
+            mask_asset = asset_manager.get_mask_by_name(name)
             if mask_asset:
                 metadata["visible_masks"].append(self._get_asset_metadata(mask_asset))
 
@@ -348,7 +367,7 @@ class ImageDisplayHandler:
         saved_files = []
 
         for name in sorted(self.visible_masks):
-            mask_asset = asset_manager.masks.get(name)
+            mask_asset = asset_manager.get_mask_by_name(name)
             if not mask_asset:
                 continue
 
