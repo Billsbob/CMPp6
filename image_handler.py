@@ -213,18 +213,23 @@ class ImageDisplayHandler:
             return []
 
         # Convert QImage to numpy array for saving with metadata
-        h, w = composite_qimage.height(), composite_qimage.width()
-        # Ensure we're using a format we know. 
-        # Format_RGB888 is 24-bit per pixel (3 bytes)
         if composite_qimage.format() != QImage.Format_RGB888:
             composite_qimage = composite_qimage.convertToFormat(QImage.Format_RGB888)
-        
+
+        h, w = composite_qimage.height(), composite_qimage.width()
         ptr = composite_qimage.constBits()
-        # np.frombuffer on constBits() returns a read-only array
-        # we reshape to height, width, 3
-        arr = np.frombuffer(ptr, np.uint8).reshape((h, w, 3))
-        # Copy to make it writable if needed
-        arr = arr.copy()
+        stride = composite_qimage.bytesPerLine()
+
+        # np.frombuffer on constBits() returns a 1D array of bytes
+        arr_1d = np.frombuffer(ptr, np.uint8)
+
+        # Correctly handle stride (padding at the end of each row)
+        # Each row takes 'stride' bytes, but we only care about the first 'w * 3' bytes
+        arr = np.zeros((h, w, 3), dtype=np.uint8)
+        for y in range(h):
+            row_start = y * stride
+            row_end = row_start + (w * 3)
+            arr[y, :, :] = arr_1d[row_start:row_end].reshape((w, 3))
 
         # Prepare metadata about all visible layers
         metadata = {

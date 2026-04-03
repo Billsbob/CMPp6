@@ -21,7 +21,7 @@ def is_cuda_available():
         logger.warning(f"CUDA device not accessible: {e}")
         return False
 
-def apply_isodata_cuda(data, initial_clusters=3, max_iter=100, min_samples=20, max_stddev=10, min_dist=20, max_merge_pairs=2, random_state=None):
+def apply_isodata_cuda(data, initial_clusters=3, max_iter=100, min_samples=20, max_stddev=10, min_dist=20, max_merge_pairs=2, random_state=None, include_coords=False, coord_weight=1.0):
     """
     Apply ISODATA clustering to the image data using CUDA (cupy).
     """
@@ -39,8 +39,18 @@ def apply_isodata_cuda(data, initial_clusters=3, max_iter=100, min_samples=20, m
     else:
         features = data_float.reshape(-1, data_float.shape[2])
 
-    # Move to GPU
-    features_gpu = cp.asarray(features)
+    if include_coords:
+        y, x = cp.mgrid[0:h, 0:w]
+        # Normalize coordinates to [0, 1] and apply weight
+        x = (x.astype(cp.float32) / max(1, w - 1)) * coord_weight
+        y = (y.astype(cp.float32) / max(1, h - 1)) * coord_weight
+        coords = cp.stack([x.ravel(), y.ravel()], axis=-1)
+        # Move features to GPU first
+        features_gpu = cp.asarray(features)
+        features_gpu = cp.hstack([features_gpu, coords])
+    else:
+        # Move to GPU
+        features_gpu = cp.asarray(features)
     
     rng = cp.random.RandomState(random_state)
 

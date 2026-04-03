@@ -222,15 +222,13 @@ class AssetManager:
         if not self.working_dir:
             return
 
-        images_dir = os.path.join(self.working_dir, "Images")
-        clusters_dir = os.path.join(self.working_dir, "Clusters")
-
         self.images = {}
-        if os.path.exists(images_dir):
-            for f in os.listdir(images_dir):
-                if f.lower().endswith(('.tif', '.tiff')):
-                    self.images[f] = Asset(os.path.join(images_dir, f), is_mask=False)
+        # Load images directly from the working directory
+        for f in os.listdir(self.working_dir):
+            if f.lower().endswith(('.tif', '.tiff')):
+                self.images[f] = Asset(os.path.join(self.working_dir, f), is_mask=False)
 
+        clusters_dir = os.path.join(self.working_dir, "Clusters")
         self.masks = {}
         if os.path.exists(clusters_dir):
             for f in os.listdir(clusters_dir):
@@ -379,6 +377,40 @@ class AssetManager:
             # Remove from internal dictionary
             del self.masks[file_name]
             return True, "Mask deleted successfully."
+        except Exception as e:
+            return False, str(e)
+
+    def delete_image(self, name):
+        """
+        Delete an image from the system.
+        :param name: display name or filename of the image
+        :return: (success, message)
+        """
+        file_name = None
+        if name in self.images:
+            file_name = name
+        else:
+            for key, asset in self.images.items():
+                if asset.name == name:
+                    file_name = key
+                    break
+        
+        if not file_name:
+            return False, f"Image '{name}' not found."
+
+        asset = self.images[file_name]
+        try:
+            # Delete image file
+            if os.path.exists(asset.path):
+                os.remove(asset.path)
+            
+            # Delete project file
+            if os.path.exists(asset.project_path):
+                os.remove(asset.project_path)
+            
+            # Remove from internal dictionary
+            del self.images[file_name]
+            return True, "Image deleted successfully."
         except Exception as e:
             return False, str(e)
 

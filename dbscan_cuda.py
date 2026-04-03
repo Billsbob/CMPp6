@@ -24,7 +24,7 @@ def is_cuda_available():
         logger.warning(f"CUDA device not accessible: {e}")
         return False
 
-def apply_dbscan_cuda(data, eps=0.5, min_samples=5, metric='euclidean', batch_size=2000):
+def apply_dbscan_cuda(data, eps=0.5, min_samples=5, metric='euclidean', batch_size=2000, include_coords=False, coord_weight=1.0):
     """
     Apply DBSCAN clustering to the image data using CUDA (cupy).
     :param data: numpy array of shape (H, W) or (H, W, C)
@@ -32,6 +32,8 @@ def apply_dbscan_cuda(data, eps=0.5, min_samples=5, metric='euclidean', batch_si
     :param min_samples: The number of samples in a neighborhood for a point to be considered as a core point.
     :param metric: The metric to use when calculating distance. Currently only 'euclidean' is optimized.
     :param batch_size: Batch size for tiled computation to save memory.
+    :param include_coords: Whether to include (x, y) coordinates as features.
+    :param coord_weight: Scaling factor for coordinates.
     :return: cluster labels as a numpy array of shape (H, W)
     """
     if not is_cuda_available():
@@ -48,7 +50,18 @@ def apply_dbscan_cuda(data, eps=0.5, min_samples=5, metric='euclidean', batch_si
     else:
         features = data_float.reshape(-1, data_float.shape[2])
 
-    X = cp.asarray(features)
+    if include_coords:
+        y, x = cp.mgrid[0:h, 0:w]
+        # Normalize coordinates to [0, 1] and apply weight
+        x = (x.astype(cp.float32) / max(1, w - 1)) * coord_weight
+        y = (y.astype(cp.float32) / max(1, h - 1)) * coord_weight
+        coords = cp.stack([x.ravel(), y.ravel()], axis=-1)
+        # Move features to GPU
+        X = cp.asarray(features)
+        X = cp.hstack([X, coords])
+    else:
+        X = cp.asarray(features)
+    
     N = X.shape[0]
     
     # 1. Identify core points

@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QComboBox, QCheckBox
 )
 from PySide6.QtGui import QAction, QPixmap, QIcon, QPainter, QWheelEvent, QTransform, QPalette, QPen, QColor, QBrush
-from PySide6.QtCore import Qt, QSize, QPoint, QPointF, QRectF
+from PySide6.QtCore import Qt, QSize, QPoint, QPointF, QRectF, QThread, Signal
 import os
 import json
 from datetime import datetime
@@ -39,6 +39,9 @@ class ZoomableView(QGraphicsView):
         self.moving_selection = False
         self.move_offset = QPointF()
         self.zoom_factor = 1.0
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
 
     def set_pixmap(self, pixmap):
         if pixmap:
@@ -221,7 +224,9 @@ class KMeansParameterDialog(QDialog):
             "max_iter": 300,
             "tol": 0.0001,
             "init": "k-means++",
-            "random_state": None
+            "random_state": None,
+            "include_coords": False,
+            "coord_weight": 1.0
         }
         self.setup_ui()
 
@@ -255,6 +260,18 @@ class KMeansParameterDialog(QDialog):
         self.random_state_edit.setPlaceholderText("None (random)")
         form_layout.addRow("Random State:", self.random_state_edit)
 
+        self.include_coords_cb = QCheckBox("Include Coordinates (x, y)")
+        self.include_coords_cb.setChecked(self.params["include_coords"])
+        form_layout.addRow(self.include_coords_cb)
+
+        self.coord_weight_spin = QDoubleSpinBox()
+        self.coord_weight_spin.setRange(0.01, 100.0)
+        self.coord_weight_spin.setSingleStep(0.1)
+        self.coord_weight_spin.setValue(self.params["coord_weight"])
+        self.coord_weight_spin.setEnabled(self.params["include_coords"])
+        self.include_coords_cb.toggled.connect(self.coord_weight_spin.setEnabled)
+        form_layout.addRow("Coordinate Weight:", self.coord_weight_spin)
+
         layout.addLayout(form_layout)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -274,7 +291,9 @@ class KMeansParameterDialog(QDialog):
             "max_iter": self.max_iter_spin.value(),
             "tol": self.tol_spin.value(),
             "init": self.init_combo.currentText(),
-            "random_state": random_state
+            "random_state": random_state,
+            "include_coords": self.include_coords_cb.isChecked(),
+            "coord_weight": self.coord_weight_spin.value()
         }
 
 class IsodataParameterDialog(QDialog):
@@ -292,7 +311,9 @@ class IsodataParameterDialog(QDialog):
             "max_stddev": 10,
             "min_dist": 20,
             "max_merge_pairs": 2,
-            "random_state": None
+            "random_state": None,
+            "include_coords": False,
+            "coord_weight": 1.0
         }
         self.setup_ui()
 
@@ -334,6 +355,18 @@ class IsodataParameterDialog(QDialog):
         self.random_state_edit.setPlaceholderText("None (random)")
         form_layout.addRow("Random State:", self.random_state_edit)
 
+        self.include_coords_cb = QCheckBox("Include Coordinates (x, y)")
+        self.include_coords_cb.setChecked(self.params["include_coords"])
+        form_layout.addRow(self.include_coords_cb)
+
+        self.coord_weight_spin = QDoubleSpinBox()
+        self.coord_weight_spin.setRange(0.01, 100.0)
+        self.coord_weight_spin.setSingleStep(0.1)
+        self.coord_weight_spin.setValue(self.params["coord_weight"])
+        self.coord_weight_spin.setEnabled(self.params["include_coords"])
+        self.include_coords_cb.toggled.connect(self.coord_weight_spin.setEnabled)
+        form_layout.addRow("Coordinate Weight:", self.coord_weight_spin)
+
         layout.addLayout(form_layout)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -355,7 +388,9 @@ class IsodataParameterDialog(QDialog):
             "max_stddev": self.max_stddev_spin.value(),
             "min_dist": self.min_dist_spin.value(),
             "max_merge_pairs": self.max_merge_pairs_spin.value(),
-            "random_state": random_state
+            "random_state": random_state,
+            "include_coords": self.include_coords_cb.isChecked(),
+            "coord_weight": self.coord_weight_spin.value()
         }
 
 class DBSCANParameterDialog(QDialog):
@@ -371,7 +406,9 @@ class DBSCANParameterDialog(QDialog):
             "min_samples": 5,
             "metric": "euclidean",
             "algorithm": "auto",
-            "p": 2
+            "p": 2,
+            "include_coords": False,
+            "coord_weight": 1.0
         }
         self.setup_ui()
 
@@ -407,6 +444,18 @@ class DBSCANParameterDialog(QDialog):
             self.p_spin.setValue(self.params["p"])
             form_layout.addRow("P (Minkowski power):", self.p_spin)
 
+        self.include_coords_cb = QCheckBox("Include Coordinates (x, y)")
+        self.include_coords_cb.setChecked(self.params["include_coords"])
+        form_layout.addRow(self.include_coords_cb)
+
+        self.coord_weight_spin = QDoubleSpinBox()
+        self.coord_weight_spin.setRange(0.01, 100.0)
+        self.coord_weight_spin.setSingleStep(0.1)
+        self.coord_weight_spin.setValue(self.params["coord_weight"])
+        self.coord_weight_spin.setEnabled(self.params["include_coords"])
+        self.include_coords_cb.toggled.connect(self.coord_weight_spin.setEnabled)
+        form_layout.addRow("Coordinate Weight:", self.coord_weight_spin)
+
         layout.addLayout(form_layout)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -417,7 +466,9 @@ class DBSCANParameterDialog(QDialog):
     def get_params(self):
         params = {
             "eps": self.eps_spin.value(),
-            "min_samples": self.min_samples_spin.value()
+            "min_samples": self.min_samples_spin.value(),
+            "include_coords": self.include_coords_cb.isChecked(),
+            "coord_weight": self.coord_weight_spin.value()
         }
         if not self.is_cuda:
             params["metric"] = self.metric_combo.currentText()
@@ -429,6 +480,23 @@ class HDBSCANParameterDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("HDBSCAN Clustering Parameters")
+        self.params = {
+            "min_cluster_size": 5,
+            "min_samples": 5,
+            "cluster_selection_epsilon": 0.0,
+            "max_cluster_size": 0,
+            "metric": "euclidean",
+            "alpha": 1.0,
+            "algorithm": "auto",
+            "leaf_size": 40,
+            "n_jobs": -1,
+            "cluster_selection_method": "eom",
+            "allow_single_cluster": False,
+            "store_centers": "None",
+            "copy": False,
+            "include_coords": False,
+            "coord_weight": 1.0
+        }
         self.setup_ui()
 
     def setup_ui(self):
@@ -437,28 +505,28 @@ class HDBSCANParameterDialog(QDialog):
 
         self.min_cluster_size_spin = QSpinBox()
         self.min_cluster_size_spin.setRange(2, 10000)
-        self.min_cluster_size_spin.setValue(5)
+        self.min_cluster_size_spin.setValue(self.params["min_cluster_size"])
         form_layout.addRow("Min Cluster Size:", self.min_cluster_size_spin)
 
         self.min_samples_spin = QSpinBox()
         self.min_samples_spin.setRange(1, 10000)
-        self.min_samples_spin.setValue(5)
+        self.min_samples_spin.setValue(self.params["min_samples"])
         form_layout.addRow("Min Samples:", self.min_samples_spin)
 
         self.cluster_selection_epsilon_spin = QDoubleSpinBox()
         self.cluster_selection_epsilon_spin.setRange(0.0, 1000.0)
         self.cluster_selection_epsilon_spin.setSingleStep(0.1)
-        self.cluster_selection_epsilon_spin.setValue(0.0)
+        self.cluster_selection_epsilon_spin.setValue(self.params["cluster_selection_epsilon"])
         form_layout.addRow("Cluster Selection Epsilon:", self.cluster_selection_epsilon_spin)
 
         self.max_cluster_size_spin = QSpinBox()
         self.max_cluster_size_spin.setRange(0, 1000000)
-        self.max_cluster_size_spin.setValue(0)
+        self.max_cluster_size_spin.setValue(self.params["max_cluster_size"])
         form_layout.addRow("Max Cluster Size (0 for None):", self.max_cluster_size_spin)
 
         self.metric_combo = QComboBox()
         self.metric_combo.addItems(["euclidean", "manhattan", "chebyshev", "minkowski", "canberra", "braycurtis"])
-        self.metric_combo.setCurrentText("euclidean")
+        self.metric_combo.setCurrentText(self.params["metric"])
         form_layout.addRow("Metric:", self.metric_combo)
 
         self.metric_params_edit = QLineEdit()
@@ -467,41 +535,53 @@ class HDBSCANParameterDialog(QDialog):
         self.alpha_spin = QDoubleSpinBox()
         self.alpha_spin.setRange(0.1, 10.0)
         self.alpha_spin.setSingleStep(0.1)
-        self.alpha_spin.setValue(1.0)
+        self.alpha_spin.setValue(self.params["alpha"])
         form_layout.addRow("Alpha:", self.alpha_spin)
 
         self.algorithm_combo = QComboBox()
         self.algorithm_combo.addItems(["auto", "brute", "kd_tree", "ball_tree"])
-        self.algorithm_combo.setCurrentText("auto")
+        self.algorithm_combo.setCurrentText(self.params["algorithm"])
         form_layout.addRow("Algorithm:", self.algorithm_combo)
 
         self.leaf_size_spin = QSpinBox()
         self.leaf_size_spin.setRange(1, 1000)
-        self.leaf_size_spin.setValue(40)
+        self.leaf_size_spin.setValue(self.params["leaf_size"])
         form_layout.addRow("Leaf Size:", self.leaf_size_spin)
 
         self.n_jobs_spin = QSpinBox()
         self.n_jobs_spin.setRange(-1, 128)
-        self.n_jobs_spin.setValue(-1)
+        self.n_jobs_spin.setValue(self.params["n_jobs"])
         form_layout.addRow("Number of Jobs (-1 for all):", self.n_jobs_spin)
 
         self.cluster_selection_combo = QComboBox()
         self.cluster_selection_combo.addItems(["eom", "leaf"])
-        self.cluster_selection_combo.setCurrentText("eom")
+        self.cluster_selection_combo.setCurrentText(self.params["cluster_selection_method"])
         form_layout.addRow("Cluster Selection:", self.cluster_selection_combo)
 
         self.allow_single_cluster_check = QCheckBox()
-        self.allow_single_cluster_check.setChecked(False)
+        self.allow_single_cluster_check.setChecked(self.params["allow_single_cluster"])
         form_layout.addRow("Allow Single Cluster:", self.allow_single_cluster_check)
 
         self.store_centers_combo = QComboBox()
         self.store_centers_combo.addItems(["None", "centroid", "medoid", "both"])
-        self.store_centers_combo.setCurrentText("None")
+        self.store_centers_combo.setCurrentText(self.params["store_centers"])
         form_layout.addRow("Store Centers:", self.store_centers_combo)
 
         self.copy_check = QCheckBox()
-        self.copy_check.setChecked(False)
+        self.copy_check.setChecked(self.params["copy"])
         form_layout.addRow("Copy:", self.copy_check)
+
+        self.include_coords_cb = QCheckBox("Include Coordinates (x, y)")
+        self.include_coords_cb.setChecked(self.params["include_coords"])
+        form_layout.addRow(self.include_coords_cb)
+
+        self.coord_weight_spin = QDoubleSpinBox()
+        self.coord_weight_spin.setRange(0.01, 100.0)
+        self.coord_weight_spin.setSingleStep(0.1)
+        self.coord_weight_spin.setValue(self.params["coord_weight"])
+        self.coord_weight_spin.setEnabled(self.params["include_coords"])
+        self.include_coords_cb.toggled.connect(self.coord_weight_spin.setEnabled)
+        form_layout.addRow("Coordinate Weight:", self.coord_weight_spin)
 
         layout.addLayout(form_layout)
 
@@ -545,7 +625,9 @@ class HDBSCANParameterDialog(QDialog):
             "cluster_selection_method": self.cluster_selection_combo.currentText(),
             "allow_single_cluster": self.allow_single_cluster_check.isChecked(),
             "store_centers": store_centers,
-            "copy": self.copy_check.isChecked()
+            "copy": self.copy_check.isChecked(),
+            "include_coords": self.include_coords_cb.isChecked(),
+            "coord_weight": self.coord_weight_spin.value()
         }
 
 class OPTICSParameterDialog(QDialog):
@@ -624,6 +706,18 @@ class OPTICSParameterDialog(QDialog):
         self.n_jobs_spin.setValue(-1)
         form_layout.addRow("Number of Jobs (-1 for all):", self.n_jobs_spin)
 
+        self.include_coords_cb = QCheckBox("Include Coordinates (x, y)")
+        self.include_coords_cb.setChecked(False)
+        form_layout.addRow(self.include_coords_cb)
+
+        self.coord_weight_spin = QDoubleSpinBox()
+        self.coord_weight_spin.setRange(0.01, 100.0)
+        self.coord_weight_spin.setSingleStep(0.1)
+        self.coord_weight_spin.setValue(1.0)
+        self.coord_weight_spin.setEnabled(False)
+        self.include_coords_cb.toggled.connect(self.coord_weight_spin.setEnabled)
+        form_layout.addRow("Coordinate Weight:", self.coord_weight_spin)
+
         layout.addLayout(form_layout)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -676,8 +770,89 @@ class OPTICSParameterDialog(QDialog):
             "algorithm": self.algorithm_combo.currentText(),
             "leaf_size": self.leaf_size_spin.value(),
             "memory": memory,
-            "n_jobs": n_jobs
+            "n_jobs": n_jobs,
+            "include_coords": self.include_coords_cb.isChecked(),
+            "coord_weight": self.coord_weight_spin.value()
         }
+
+class ScanpyParameterDialog(QDialog):
+    def __init__(self, parent=None, is_leiden=False):
+        super().__init__(parent)
+        self.is_leiden = is_leiden
+        self.setWindowTitle("Leiden Clustering Parameters" if is_leiden else "kNN Parameters")
+        self.setup_ui()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        if not self.is_leiden:
+            self.n_neighbors_spin = QSpinBox()
+            self.n_neighbors_spin.setRange(1, 1000)
+            self.n_neighbors_spin.setValue(15)
+            form.addRow("n_neighbors:", self.n_neighbors_spin)
+
+            self.use_rep_edit = QLineEdit("X")
+            form.addRow("use_rep:", self.use_rep_edit)
+
+            self.do_pca_check = QCheckBox("Perform PCA")
+            self.do_pca_check.setChecked(False)
+            form.addRow(self.do_pca_check)
+
+            self.do_spatial_check = QCheckBox("Run Squidpy Spatial")
+            self.do_spatial_check.setChecked(True)
+            form.addRow(self.do_spatial_check)
+
+            self.coord_type_combo = QComboBox()
+            self.coord_type_combo.addItems(["grid", "generic"])
+            form.addRow("coord_type:", self.coord_type_combo)
+
+            self.n_neighs_spin = QSpinBox()
+            self.n_neighs_spin.setRange(1, 100)
+            self.n_neighs_spin.setValue(6)
+            form.addRow("n_neighs (spatial):", self.n_neighs_spin)
+
+            self.include_coords_cb = QCheckBox("Include Coordinates (x, y)")
+            self.include_coords_cb.setChecked(False)
+            form.addRow(self.include_coords_cb)
+
+            self.coord_weight_spin = QDoubleSpinBox()
+            self.coord_weight_spin.setRange(0.01, 100.0)
+            self.coord_weight_spin.setSingleStep(0.1)
+            self.coord_weight_spin.setValue(1.0)
+            self.coord_weight_spin.setEnabled(False)
+            self.include_coords_cb.toggled.connect(self.coord_weight_spin.setEnabled)
+            form.addRow("Coordinate Weight:", self.coord_weight_spin)
+
+        if self.is_leiden:
+            self.resolution_spin = QDoubleSpinBox()
+            self.resolution_spin.setRange(0.01, 10.0)
+            self.resolution_spin.setSingleStep(0.1)
+            self.resolution_spin.setValue(1.0)
+            form.addRow("Resolution:", self.resolution_spin)
+
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_params(self):
+        if self.is_leiden:
+            return {"resolution": self.resolution_spin.value()}
+        
+        params = {
+            "n_neighbors": self.n_neighbors_spin.value(),
+            "use_rep": self.use_rep_edit.text(),
+            "do_pca": self.do_pca_check.isChecked(),
+            "run_spatial": self.do_spatial_check.isChecked(),
+            "coord_type": self.coord_type_combo.currentText(),
+            "n_neighs": self.n_neighs_spin.value(),
+            "include_coords": self.include_coords_cb.isChecked(),
+            "coord_weight": self.coord_weight_spin.value()
+        }
+        return params
 
 class SaveVisibleDialog(QDialog):
     def __init__(self, parent=None, has_masks=False, export_mode=None):
@@ -729,6 +904,97 @@ class SaveVisibleDialog(QDialog):
         }
         return options
 
+class ClusteringWorker(QThread):
+    finished = Signal(object)  # labels
+    error = Signal(str)
+
+    def __init__(self, clustering_func, data, params):
+        super().__init__()
+        self.clustering_func = clustering_func
+        self.data = data
+        self.params = params
+
+    def run(self):
+        try:
+            labels = self.clustering_func(self.data, **self.params)
+            self.finished.emit(labels)
+        except Exception as e:
+            self.error.emit(str(e))
+
+class ScanpyWorker(QThread):
+    finished = Signal(object)  # (graph_name, pixmap, adata)
+    error = Signal(str)
+
+    def __init__(self, image_data_list, image_names, params):
+        super().__init__()
+        self.image_data_list = image_data_list
+        self.image_names = image_names
+        self.params = params
+
+    def run(self):
+        try:
+            import scanpy_module
+            from datetime import datetime
+            
+            adata = scanpy_module.run_scanpy_knn(self.image_data_list, self.image_names, **self.params)
+            
+            # Generate UMAP
+            pixmap = scanpy_module.plot_umap_to_pixmap(adata, color='image_name')
+            
+            graph_name = f"UMAP_{datetime.now().strftime('%H%M%S')}"
+            self.finished.emit((graph_name, pixmap, adata))
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.error.emit(str(e))
+
+class LeidenWorker(QThread):
+    finished = Signal(object)  # (adata_leiden, mask_info_list)
+    error = Signal(str)
+
+    def __init__(self, adata, resolution, graph_name):
+        super().__init__()
+        self.adata = adata
+        self.resolution = resolution
+        self.graph_name = graph_name
+
+    def run(self):
+        try:
+            import scanpy_module
+            
+            # Work on a copy of adata
+            adata_leiden = self.adata.copy()
+            adata_leiden = scanpy_module.run_leiden(adata_leiden, resolution=self.resolution)
+            
+            # Extract info for masks
+            mask_info_list = []
+            clusters = adata_leiden.obs['leiden']
+            unique_clusters = clusters.unique()
+            image_names_in_adata = adata_leiden.obs['image_name']
+            spatial_coords = adata_leiden.obsm['spatial']
+            
+            for img_name in image_names_in_adata.unique():
+                img_mask_idx = (image_names_in_adata == img_name)
+                img_clusters = clusters[img_mask_idx]
+                img_spatial = spatial_coords[img_mask_idx]
+                
+                for cluster_id in sorted(unique_clusters):
+                    cluster_mask_idx = (img_clusters == cluster_id)
+                    cluster_spatial = img_spatial[cluster_mask_idx]
+                    
+                    if len(cluster_spatial) > 0:
+                        mask_info_list.append({
+                            'img_name': img_name,
+                            'cluster_id': cluster_id,
+                            'spatial': cluster_spatial.copy()
+                        })
+            
+            self.finished.emit((adata_leiden, mask_info_list))
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.error.emit(str(e))
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -740,6 +1006,7 @@ class MainWindow(QMainWindow):
         self.image_handler = ImageDisplayHandler()
         self.graphs = {} # name -> {image_data, mask_data, orig_image_name, orig_mask_name}
         self.working_dir = None
+        self.worker = None
         
         self.cached_composite = None
 
@@ -751,6 +1018,22 @@ class MainWindow(QMainWindow):
         # Create the MDI workspace
         self.mdi_area = QMdiArea()
         self.setCentralWidget(self.mdi_area)
+
+        # Background message for the MDI area
+        self.background_label = QLabel(self.mdi_area.viewport())
+        self.background_label.setAlignment(Qt.AlignCenter)
+        self.background_label.setStyleSheet("color: #888888; font-size: 18px; background: transparent; padding: 20px;")
+        self.background_label.setText(
+            "1.  Click 'Home' and navigate to your image folder.\n\n"
+            "2.  Select images in left-column to appear in Image window.\n"
+            "Right-click to access submenu to change image color or contrast.\n\n"
+            "3.  Use ctrl+scroll to zoom in and out.  Click and drag to create a crop area.\n"
+            "When crop selection is placed, use Tools>Crop to apply crop to all images.\n\n"
+            "4.  After preprocessing with invert, rotate, or filter, select desired cluster method from \"Cluster\" menu.\n\n"
+            "5. To create a histogram: Select 1 cluster mask and any number of images then Analysis>Create Graph."
+        )
+        self.background_label.setWordWrap(True)
+        self.background_label.setAttribute(Qt.WA_TransparentForMouseEvents)
 
         # Create a dock widget for images and masks
         dock = QDockWidget("Assets", self)
@@ -775,9 +1058,13 @@ class MainWindow(QMainWindow):
         self.select_none_images_btn = QPushButton("Select\nNone")
         self.select_none_images_btn.setFixedWidth(60)
         self.select_none_images_btn.clicked.connect(self._select_none_images)
+        self.delete_images_btn = QPushButton("Delete")
+        self.delete_images_btn.setFixedWidth(60)
+        self.delete_images_btn.clicked.connect(self._delete_selected_images)
         
         image_btn_layout.addWidget(self.select_all_images_btn)
         image_btn_layout.addWidget(self.select_none_images_btn)
+        image_btn_layout.addWidget(self.delete_images_btn)
         image_btn_layout.addStretch()
         
         self.image_list = QListWidget()
@@ -807,9 +1094,13 @@ class MainWindow(QMainWindow):
         self.select_none_masks_btn = QPushButton("Select\nNone")
         self.select_none_masks_btn.setFixedWidth(60)
         self.select_none_masks_btn.clicked.connect(self._select_none_masks)
+        self.delete_masks_btn = QPushButton("Delete")
+        self.delete_masks_btn.setFixedWidth(60)
+        self.delete_masks_btn.clicked.connect(self._delete_selected_masks)
         
         mask_btn_layout.addWidget(self.select_all_masks_btn)
         mask_btn_layout.addWidget(self.select_none_masks_btn)
+        mask_btn_layout.addWidget(self.delete_masks_btn)
         mask_btn_layout.addStretch()
         
         self.mask_list = QListWidget()
@@ -839,9 +1130,13 @@ class MainWindow(QMainWindow):
         self.select_none_hists_btn = QPushButton("Select\nNone")
         self.select_none_hists_btn.setFixedWidth(60)
         self.select_none_hists_btn.clicked.connect(self._select_none_graphs)
+        self.delete_graphs_btn = QPushButton("Delete")
+        self.delete_graphs_btn.setFixedWidth(60)
+        self.delete_graphs_btn.clicked.connect(self._delete_selected_graphs)
         
         hist_btn_layout.addWidget(self.select_all_hists_btn)
         hist_btn_layout.addWidget(self.select_none_hists_btn)
+        hist_btn_layout.addWidget(self.delete_graphs_btn)
         hist_btn_layout.addStretch()
         
         self.graph_list = QListWidget()
@@ -896,12 +1191,16 @@ class MainWindow(QMainWindow):
     def _create_menu_bar(self):
         menu_bar = self.menuBar()
 
-        # "Home" button - as an action directly in the menu bar if possible, 
-        # but typically menus contain dropdowns. 
-        # However, many apps use a single action for Home.
+        # "Home" button
         home_action = QAction("Home", self)
         home_action.triggered.connect(self._home_triggered)
         menu_bar.addAction(home_action)
+
+        # "Stop" button - initially disabled
+        self.stop_action = QAction("Stop", self)
+        self.stop_action.setEnabled(False)
+        self.stop_action.triggered.connect(self._stop_clustering_triggered)
+        menu_bar.addAction(self.stop_action)
 
         # "Cluster" dropdown button
         cluster_menu = menu_bar.addMenu("Cluster")
@@ -938,6 +1237,17 @@ class MainWindow(QMainWindow):
         optics_action = QAction("OPTICS", self)
         optics_action.triggered.connect(self._apply_optics_triggered)
         cluster_menu.addAction(optics_action)
+
+        # "kNN+L" submenu under "Clustering"
+        knnl_menu = cluster_menu.addMenu("kNN+L")
+        
+        knn_action = QAction("kNN", self)
+        knn_action.triggered.connect(self._apply_scanpy_knn_triggered)
+        knnl_menu.addAction(knn_action)
+        
+        leiden_action = QAction("Leiden Clustering", self)
+        leiden_action.triggered.connect(self._apply_leiden_triggered)
+        knnl_menu.addAction(leiden_action)
 
         # "Tools" dropdown button
         tools_menu = menu_bar.addMenu("Tools")
@@ -1015,6 +1325,11 @@ class MainWindow(QMainWindow):
         directory = QFileDialog.getExistingDirectory(self, "Select Working Directory")
         if directory:
             self.working_dir = directory
+            
+            # Create Clusters and Graphs folders if they don't exist
+            os.makedirs(os.path.join(directory, "Clusters"), exist_ok=True)
+            os.makedirs(os.path.join(directory, "Graphs"), exist_ok=True)
+            
             self.asset_manager.set_working_dir(directory)
             
             # Load graphs if "Graphs" folder exists
@@ -1165,6 +1480,7 @@ class MainWindow(QMainWindow):
             if self.image_handler.is_visible(name, is_graph=True):
                 item.setSelected(True)
 
+        self.graph_list.clear()
         for name in self.graphs.keys():
             item = QListWidgetItem(name)
             # We don't have thumbnails for graphs, but we could generate one or use a placeholder
@@ -1198,6 +1514,11 @@ class MainWindow(QMainWindow):
         save_csv_action = QAction("Save .csv", self)
         save_csv_action.triggered.connect(lambda: self._save_graph_csv(name))
         menu.addAction(save_csv_action)
+        
+        # Save PNG
+        save_png_action = QAction("Save .png", self)
+        save_png_action.triggered.connect(lambda: self._save_graph_png(name))
+        menu.addAction(save_png_action)
         
         menu.addSeparator()
 
@@ -1318,6 +1639,39 @@ class MainWindow(QMainWindow):
             self.cached_composite = None
             self._refresh_viewer()
 
+    def _on_clustering_finished(self, labels, prefix, method_name):
+        # Create masks for each cluster
+        home_folder_name = os.path.basename(self.working_dir) if self.working_dir else "Project"
+        unique_labels = np.unique(labels)
+        
+        for i, label in enumerate(unique_labels):
+            cluster_mask = (labels == label).astype(np.uint8) * 255
+            if label == -1:
+                mask_name = f"{home_folder_name}_{prefix}_Noise"
+            else:
+                mask_name = f"{home_folder_name}_{prefix}_{i:02d}"
+            
+            # Create mask asset and add to manager
+            self.asset_manager.add_new_mask(mask_name, cluster_mask)
+            
+        self._update_asset_list()
+        self.stop_action.setEnabled(False)
+        self.worker = None
+        self.statusBar().showMessage(f"{method_name} clustering complete. Created {len(unique_labels)} masks.")
+
+    def _stop_clustering_triggered(self):
+        if self.worker and self.worker.isRunning():
+            self.worker.terminate()
+            self.worker.wait()
+            self.statusBar().showMessage("Clustering task stopped by user.")
+            self.stop_action.setEnabled(False)
+            self.worker = None
+
+    def _on_worker_error(self, err):
+        QMessageBox.critical(self, "Clustering Error", f"An error occurred during clustering: {err}")
+        self.stop_action.setEnabled(False)
+        self.worker = None
+
     def _apply_kmeans_triggered(self):
         visible_names = list(self.image_handler.visible_assets)
         if not visible_names:
@@ -1332,11 +1686,17 @@ class MainWindow(QMainWindow):
         
         # Collect data from visible images
         stack = []
+        target_shape = None
         for name in sorted(visible_names):
             image_asset, _ = self.asset_manager.get_asset_pair(name)
             if image_asset:
                 data = image_asset.get_rendered_data(for_clustering=True)
                 if data is not None:
+                    if target_shape is None:
+                        target_shape = data.shape
+                    elif data.shape != target_shape:
+                        QMessageBox.warning(self, "Shape Mismatch", f"Image '{name}' has shape {data.shape}, but expected {target_shape}. Skipping.")
+                        continue
                     stack.append(data)
         
         if not stack:
@@ -1344,27 +1704,17 @@ class MainWindow(QMainWindow):
             
         # Combine stacked data if multiple images
         if len(stack) > 1:
-            # Ensure all have same shape
-            # In a real app we might need to resize, here assume same size
             combined_data = np.stack([s.astype(np.float32) for s in stack], axis=-1)
         else:
             combined_data = stack[0]
 
         try:
-            labels = apply_kmeans(combined_data, **params)
-            
-            # Create masks for each cluster
-            home_folder_name = os.path.basename(self.working_dir) if self.working_dir else "Project"
-            
-            for i in range(params["n_clusters"]):
-                cluster_mask = (labels == i).astype(np.uint8) * 255
-                mask_name = f"{home_folder_name}_KC_{i:02d}"
-                
-                # Create mask asset and add to manager
-                self.asset_manager.add_new_mask(mask_name, cluster_mask)
-                
-            self._update_asset_list()
-            self.statusBar().showMessage(f"K-Means clustering complete. Created {params['n_clusters']} masks.")
+            self.statusBar().showMessage("Running K-Means clustering...")
+            self.worker = ClusteringWorker(apply_kmeans, combined_data, params)
+            self.stop_action.setEnabled(True)
+            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "KC", "K-Means"))
+            self.worker.error.connect(self._on_worker_error)
+            self.worker.start()
             
         except Exception as e:
             QMessageBox.critical(self, "K-Means Error", f"An error occurred during clustering: {str(e)}")
@@ -1383,11 +1733,16 @@ class MainWindow(QMainWindow):
         
         # Collect data from visible images
         stack = []
+        target_shape = None
         for name in sorted(visible_names):
             image_asset, _ = self.asset_manager.get_asset_pair(name)
             if image_asset:
                 data = image_asset.get_rendered_data(for_clustering=True)
                 if data is not None:
+                    if target_shape is None:
+                        target_shape = data.shape
+                    elif data.shape != target_shape:
+                        continue
                     stack.append(data)
         
         if not stack:
@@ -1400,21 +1755,12 @@ class MainWindow(QMainWindow):
             combined_data = stack[0]
 
         try:
-            labels = apply_isodata(combined_data, **params)
-            
-            # Create masks for each cluster
-            home_folder_name = os.path.basename(self.working_dir) if self.working_dir else "Project"
-            unique_labels = np.unique(labels)
-            
-            for i, label in enumerate(unique_labels):
-                cluster_mask = (labels == label).astype(np.uint8) * 255
-                mask_name = f"{home_folder_name}_IC_{i:02d}"
-                
-                # Create mask asset and add to manager
-                self.asset_manager.add_new_mask(mask_name, cluster_mask)
-                
-            self._update_asset_list()
-            self.statusBar().showMessage(f"ISODATA clustering complete. Created {len(unique_labels)} masks.")
+            self.statusBar().showMessage("Running ISODATA clustering...")
+            self.worker = ClusteringWorker(apply_isodata, combined_data, params)
+            self.stop_action.setEnabled(True)
+            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "IC", "ISODATA"))
+            self.worker.error.connect(self._on_worker_error)
+            self.worker.start()
             
         except Exception as e:
             QMessageBox.critical(self, "ISODATA Error", f"An error occurred during clustering: {str(e)}")
@@ -1433,11 +1779,16 @@ class MainWindow(QMainWindow):
         
         # Collect data from visible images
         stack = []
+        target_shape = None
         for name in sorted(visible_names):
             image_asset, _ = self.asset_manager.get_asset_pair(name)
             if image_asset:
                 data = image_asset.get_rendered_data(for_clustering=True)
                 if data is not None:
+                    if target_shape is None:
+                        target_shape = data.shape
+                    elif data.shape != target_shape:
+                        continue
                     stack.append(data)
         
         if not stack:
@@ -1450,21 +1801,12 @@ class MainWindow(QMainWindow):
             combined_data = stack[0]
 
         try:
-            labels = apply_isodata_cuda(combined_data, **params)
-            
-            # Create masks for each cluster
-            home_folder_name = os.path.basename(self.working_dir) if self.working_dir else "Project"
-            unique_labels = np.unique(labels)
-            
-            for i, label in enumerate(unique_labels):
-                cluster_mask = (labels == label).astype(np.uint8) * 255
-                mask_name = f"{home_folder_name}_CUDA_IC_{i:02d}"
-                
-                # Create mask asset and add to manager
-                self.asset_manager.add_new_mask(mask_name, cluster_mask)
-                
-            self._update_asset_list()
-            self.statusBar().showMessage(f"CUDA ISODATA clustering complete. Created {len(unique_labels)} masks.")
+            self.statusBar().showMessage("Running CUDA ISODATA clustering...")
+            self.worker = ClusteringWorker(apply_isodata_cuda, combined_data, params)
+            self.stop_action.setEnabled(True)
+            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "CUDA_IC", "CUDA ISODATA"))
+            self.worker.error.connect(self._on_worker_error)
+            self.worker.start()
             
         except Exception as e:
             QMessageBox.critical(self, "CUDA ISODATA Error", f"An error occurred during clustering: {str(e)}")
@@ -1483,11 +1825,16 @@ class MainWindow(QMainWindow):
         
         # Collect data from visible images
         stack = []
+        target_shape = None
         for name in sorted(visible_names):
             image_asset, _ = self.asset_manager.get_asset_pair(name)
             if image_asset:
                 data = image_asset.get_rendered_data(for_clustering=True)
                 if data is not None:
+                    if target_shape is None:
+                        target_shape = data.shape
+                    elif data.shape != target_shape:
+                        continue
                     stack.append(data)
         
         if not stack:
@@ -1500,25 +1847,12 @@ class MainWindow(QMainWindow):
             combined_data = stack[0]
 
         try:
-            labels = apply_dbscan(combined_data, **params)
-            
-            # Create masks for each cluster
-            home_folder_name = os.path.basename(self.working_dir) if self.working_dir else "Project"
-            unique_labels = np.unique(labels)
-            
-            # unique_labels might include -1 for noise
-            for i, label in enumerate(unique_labels):
-                cluster_mask = (labels == label).astype(np.uint8) * 255
-                if label == -1:
-                    mask_name = f"{home_folder_name}_DC_Noise"
-                else:
-                    mask_name = f"{home_folder_name}_DC_{i:02d}"
-                
-                # Create mask asset and add to manager
-                self.asset_manager.add_new_mask(mask_name, cluster_mask)
-                
-            self._update_asset_list()
-            self.statusBar().showMessage(f"DBSCAN clustering complete. Created {len(unique_labels)} masks.")
+            self.statusBar().showMessage("Running DBSCAN clustering...")
+            self.worker = ClusteringWorker(apply_dbscan, combined_data, params)
+            self.stop_action.setEnabled(True)
+            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "DC", "DBSCAN"))
+            self.worker.error.connect(self._on_worker_error)
+            self.worker.start()
             
         except Exception as e:
             QMessageBox.critical(self, "DBSCAN Error", f"An error occurred during clustering: {str(e)}")
@@ -1537,11 +1871,16 @@ class MainWindow(QMainWindow):
         
         # Collect data from visible images
         stack = []
+        target_shape = None
         for name in sorted(visible_names):
             image_asset, _ = self.asset_manager.get_asset_pair(name)
             if image_asset:
                 data = image_asset.get_rendered_data(for_clustering=True)
                 if data is not None:
+                    if target_shape is None:
+                        target_shape = data.shape
+                    elif data.shape != target_shape:
+                        continue
                     stack.append(data)
         
         if not stack:
@@ -1554,24 +1893,12 @@ class MainWindow(QMainWindow):
             combined_data = stack[0]
 
         try:
-            labels = apply_dbscan_cuda(combined_data, **params)
-            
-            # Create masks for each cluster
-            home_folder_name = os.path.basename(self.working_dir) if self.working_dir else "Project"
-            unique_labels = np.unique(labels)
-            
-            for i, label in enumerate(unique_labels):
-                cluster_mask = (labels == label).astype(np.uint8) * 255
-                if label == -1:
-                    mask_name = f"{home_folder_name}_CUDA_DC_Noise"
-                else:
-                    mask_name = f"{home_folder_name}_CUDA_DC_{i:02d}"
-                
-                # Create mask asset and add to manager
-                self.asset_manager.add_new_mask(mask_name, cluster_mask)
-                
-            self._update_asset_list()
-            self.statusBar().showMessage(f"CUDA DBSCAN clustering complete. Created {len(unique_labels)} masks.")
+            self.statusBar().showMessage("Running CUDA DBSCAN clustering...")
+            self.worker = ClusteringWorker(apply_dbscan_cuda, combined_data, params)
+            self.stop_action.setEnabled(True)
+            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "CUDA_DC", "CUDA DBSCAN"))
+            self.worker.error.connect(self._on_worker_error)
+            self.worker.start()
             
         except Exception as e:
             QMessageBox.critical(self, "CUDA DBSCAN Error", f"An error occurred during clustering: {str(e)}")
@@ -1590,11 +1917,16 @@ class MainWindow(QMainWindow):
         
         # Collect data from visible images
         stack = []
+        target_shape = None
         for name in sorted(visible_names):
             image_asset, _ = self.asset_manager.get_asset_pair(name)
             if image_asset:
                 data = image_asset.get_rendered_data(for_clustering=True)
                 if data is not None:
+                    if target_shape is None:
+                        target_shape = data.shape
+                    elif data.shape != target_shape:
+                        continue
                     stack.append(data)
         
         if not stack:
@@ -1607,24 +1939,12 @@ class MainWindow(QMainWindow):
             combined_data = stack[0]
 
         try:
-            labels = apply_hdbscan(combined_data, **params)
-            
-            # Create masks for each cluster
-            home_folder_name = os.path.basename(self.working_dir) if self.working_dir else "Project"
-            unique_labels = np.unique(labels)
-            
-            for i, label in enumerate(unique_labels):
-                cluster_mask = (labels == label).astype(np.uint8) * 255
-                if label == -1:
-                    mask_name = f"{home_folder_name}_HC_Noise"
-                else:
-                    mask_name = f"{home_folder_name}_HC_{i:02d}"
-                
-                # Create mask asset and add to manager
-                self.asset_manager.add_new_mask(mask_name, cluster_mask)
-                
-            self._update_asset_list()
-            self.statusBar().showMessage(f"HDBSCAN clustering complete. Created {len(unique_labels)} masks.")
+            self.statusBar().showMessage("Running HDBSCAN clustering...")
+            self.worker = ClusteringWorker(apply_hdbscan, combined_data, params)
+            self.stop_action.setEnabled(True)
+            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "HC", "HDBSCAN"))
+            self.worker.error.connect(self._on_worker_error)
+            self.worker.start()
             
         except Exception as e:
             QMessageBox.critical(self, "HDBSCAN Error", f"An error occurred during clustering: {str(e)}")
@@ -1643,11 +1963,16 @@ class MainWindow(QMainWindow):
         
         # Collect data from visible images
         stack = []
+        target_shape = None
         for name in sorted(visible_names):
             image_asset, _ = self.asset_manager.get_asset_pair(name)
             if image_asset:
                 data = image_asset.get_rendered_data(for_clustering=True)
                 if data is not None:
+                    if target_shape is None:
+                        target_shape = data.shape
+                    elif data.shape != target_shape:
+                        continue
                     stack.append(data)
         
         if not stack:
@@ -1660,27 +1985,176 @@ class MainWindow(QMainWindow):
             combined_data = stack[0]
 
         try:
-            labels = apply_optics(combined_data, **params)
-            
-            # Create masks for each cluster
-            home_folder_name = os.path.basename(self.working_dir) if self.working_dir else "Project"
-            unique_labels = np.unique(labels)
-            
-            for i, label in enumerate(unique_labels):
-                cluster_mask = (labels == label).astype(np.uint8) * 255
-                if label == -1:
-                    mask_name = f"{home_folder_name}_OC_Noise"
-                else:
-                    mask_name = f"{home_folder_name}_OC_{i:02d}"
-                
-                # Create mask asset and add to manager
-                self.asset_manager.add_new_mask(mask_name, cluster_mask)
-                
-            self._update_asset_list()
-            self.statusBar().showMessage(f"OPTICS clustering complete. Created {len(unique_labels)} masks.")
+            self.statusBar().showMessage("Running OPTICS clustering...")
+            self.worker = ClusteringWorker(apply_optics, combined_data, params)
+            self.stop_action.setEnabled(True)
+            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "OC", "OPTICS"))
+            self.worker.error.connect(self._on_worker_error)
+            self.worker.start()
             
         except Exception as e:
             QMessageBox.critical(self, "OPTICS Error", f"An error occurred during clustering: {str(e)}")
+
+    def _apply_scanpy_knn_triggered(self):
+        visible_names = sorted(list(self.image_handler.visible_assets))
+        if not visible_names:
+            QMessageBox.information(self, "No Images Visible", "Please toggle at least one image visible.")
+            return
+
+        dialog = ScanpyParameterDialog(self, is_leiden=False)
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        params = dialog.get_params()
+        
+        try:
+            image_data_list = []
+            image_names = []
+            for name in visible_names:
+                asset, _ = self.asset_manager.get_asset_pair(name)
+                if asset:
+                    data = asset.get_rendered_data(for_clustering=True)
+                    if data is not None:
+                        # Downsample if too large to avoid memory issues and long wait
+                        if data.size > 1000000:
+                            h, w = data.shape[:2]
+                            factor = int(np.sqrt(data.size / 100000))
+                            if factor > 1:
+                                data = data[::factor, ::factor]
+                        image_data_list.append(data)
+                        image_names.append(name)
+            
+            if not image_data_list:
+                return
+
+            self.statusBar().showMessage("Running Scanpy kNN in background...")
+            self.worker = ScanpyWorker(image_data_list, image_names, params)
+            self.stop_action.setEnabled(True)
+            self.worker.finished.connect(self._on_scanpy_knn_finished)
+            self.worker.error.connect(self._on_worker_error)
+            self.worker.start()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Scanpy Error", f"An error occurred: {str(e)}")
+            self.statusBar().showMessage("Scanpy kNN failed.")
+
+    def _on_scanpy_knn_finished(self, result):
+        self.stop_action.setEnabled(False)
+        self.worker = None
+        graph_name, pixmap, adata = result
+        
+        # Store in graphs to keep it visible
+        self.graphs[graph_name] = {
+            'type': 'umap',
+            'pixmap': pixmap,
+            'adata': adata
+        }
+
+        # Save PNG copy in home folder
+        home_folder = os.path.expanduser("~")
+        png_path = os.path.join(home_folder, f"{graph_name}.png")
+        pixmap.save(png_path, "PNG")
+        
+        # Update graph list
+        item = QListWidgetItem(graph_name)
+        self.graph_list.addItem(item)
+        
+        # Toggle visibility for this new graph
+        self.image_handler.toggle_visibility(graph_name, is_graph=True)
+        item.setSelected(True)
+        
+        self.refresh_graph_view()
+        self.graph_subwindow.show()
+        self.graph_subwindow.setFocus()
+        self.statusBar().showMessage("Scanpy kNN complete.")
+
+    def _apply_leiden_triggered(self):
+        selected_graphs = [item.text() for item in self.graph_list.selectedItems()]
+        umap_graphs = [name for name in selected_graphs if name in self.graphs and self.graphs[name].get('type') == 'umap']
+
+        if not umap_graphs:
+            QMessageBox.information(self, "No kNN/UMAP Selected", "Please run kNN first and select the resulting UMAP graph in the Graphs list.")
+            return
+        
+        graph_name = umap_graphs[0]
+        adata = self.graphs[graph_name].get('adata')
+        
+        if adata is None:
+            QMessageBox.critical(self, "Error", "The selected UMAP graph does not contain the necessary data (AnnData).")
+            return
+
+        dialog = ScanpyParameterDialog(self, is_leiden=True)
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        params = dialog.get_params()
+        resolution = params.get('resolution', 1.0)
+        
+        try:
+            self.statusBar().showMessage("Running Leiden Clustering in background...")
+            self.worker = LeidenWorker(adata, resolution, graph_name)
+            self.stop_action.setEnabled(True)
+            self.worker.finished.connect(self._on_leiden_finished)
+            self.worker.error.connect(self._on_worker_error)
+            self.worker.start()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Leiden Error", f"An error occurred: {str(e)}")
+            self.statusBar().showMessage("Leiden Clustering failed.")
+
+    def _on_leiden_finished(self, result):
+        self.stop_action.setEnabled(False)
+        self.worker = None
+        adata_leiden, mask_info_list = result
+        
+        self.statusBar().showMessage("Leiden Clustering complete. Creating masks...")
+
+        # Create cluster masks
+        if mask_info_list:
+            self.statusBar().showMessage("Creating cluster masks...")
+            try:
+                # Group mask_info_list by image to handle image asset retrieval efficiently
+                from collections import defaultdict
+                img_to_masks = defaultdict(list)
+                for info in mask_info_list:
+                    img_to_masks[info['img_name']].append(info)
+                
+                for img_name, masks in img_to_masks.items():
+                    image_asset, _ = self.asset_manager.get_asset_pair(img_name)
+                    if not image_asset:
+                        continue
+                    
+                    # Get original dimensions
+                    orig_data = image_asset.get_rendered_data(for_clustering=False)
+                    if orig_data is None:
+                        continue
+                    h, w = orig_data.shape[:2]
+                    
+                    for info in masks:
+                        # Create empty mask
+                        mask_data = np.zeros((h, w), dtype=np.uint8)
+                        cluster_spatial = info['spatial']
+                        cluster_id = info['cluster_id']
+                        
+                        # Set pixels in mask
+                        ys = cluster_spatial[:, 1].astype(int)
+                        xs = cluster_spatial[:, 0].astype(int)
+                        
+                        # Clip to be safe
+                        ys = np.clip(ys, 0, h - 1)
+                        xs = np.clip(xs, 0, w - 1)
+                        
+                        mask_data[ys, xs] = 255
+                        
+                        mask_name = f"{img_name}_Leiden_{cluster_id}"
+                        self.asset_manager.add_new_mask(mask_name, mask_data)
+                
+                self._update_asset_list()
+                self.statusBar().showMessage("Leiden Clustering and mask creation complete.")
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self.statusBar().showMessage(f"Failed to create Leiden masks: {str(e)}")
 
     def _preview_filter(self, filter_name, params):
         # Temporary application for real-time preview
@@ -1913,20 +2387,27 @@ class MainWindow(QMainWindow):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Delete:
-            self._delete_selected_masks()
+            # Delete selected items from the lists
+            if self.image_list.selectedItems():
+                self._delete_selected_images()
+            if self.mask_list.selectedItems():
+                self._delete_selected_masks()
+            if self.graph_list.selectedItems():
+                self._delete_selected_graphs()
         super().keyPressEvent(event)
 
     def _delete_selected_masks(self):
-        visible_masks = list(self.image_handler.visible_masks)
-        if not visible_masks:
+        selected_items = self.mask_list.selectedItems()
+        if not selected_items:
             return
 
+        names_to_delete = [item.text() for item in selected_items]
         confirm = QMessageBox.question(self, "Confirm Delete", 
-                                     f"Are you sure you want to delete {len(visible_masks)} selected mask(s)?\nThis cannot be undone.",
+                                     f"Are you sure you want to delete {len(names_to_delete)} selected mask(s)?\nThis cannot be undone.",
                                      QMessageBox.Yes | QMessageBox.No)
         
         if confirm == QMessageBox.Yes:
-            for name in visible_masks:
+            for name in names_to_delete:
                 success, message = self.asset_manager.delete_mask(name)
                 if success:
                     self.image_handler.remove_asset(name, is_mask=True)
@@ -1937,7 +2418,54 @@ class MainWindow(QMainWindow):
             self.cached_composite = None
             self._update_asset_list()
             self._refresh_viewer()
-            self.statusBar().showMessage(f"Deleted {len(visible_masks)} mask(s)")
+            self.statusBar().showMessage(f"Deleted {len(names_to_delete)} mask(s)")
+
+    def _delete_selected_images(self):
+        selected_items = self.image_list.selectedItems()
+        if not selected_items:
+            return
+
+        names_to_delete = [item.text() for item in selected_items]
+        confirm = QMessageBox.question(self, "Confirm Delete", 
+                                     f"Are you sure you want to delete {len(names_to_delete)} selected image(s)?\nThis cannot be undone.",
+                                     QMessageBox.Yes | QMessageBox.No)
+        
+        if confirm == QMessageBox.Yes:
+            for name in names_to_delete:
+                success, message = self.asset_manager.delete_image(name)
+                if success:
+                    self.image_handler.remove_asset(name, is_mask=False)
+                    print(f"Image deleted: {name}")
+                else:
+                    QMessageBox.warning(self, "Delete Error", f"Failed to delete {name}: {message}")
+            
+            self.cached_composite = None
+            self._update_asset_list()
+            self._refresh_viewer()
+            self.statusBar().showMessage(f"Deleted {len(names_to_delete)} image(s)")
+
+    def _delete_selected_graphs(self):
+        selected_items = self.graph_list.selectedItems()
+        if not selected_items:
+            return
+
+        names_to_delete = [item.text() for item in selected_items]
+        confirm = QMessageBox.question(self, "Confirm Delete", 
+                                     f"Are you sure you want to delete {len(names_to_delete)} selected graph(s)?\nThis cannot be undone.",
+                                     QMessageBox.Yes | QMessageBox.No)
+        
+        if confirm == QMessageBox.Yes:
+            for name in names_to_delete:
+                if name in self.graphs:
+                    del self.graphs[name]
+                    self.image_handler.remove_asset(name, is_graph=True)
+                    print(f"Graph deleted: {name}")
+                else:
+                    QMessageBox.warning(self, "Delete Error", f"Failed to delete {name}: Graph not found in memory.")
+            
+            self._update_asset_list()
+            self._refresh_viewer()
+            self.statusBar().showMessage(f"Deleted {len(names_to_delete)} graph(s)")
 
     def _opacity_changed(self, value):
         opacity = value / 100.0
@@ -2067,6 +2595,15 @@ class MainWindow(QMainWindow):
                 )
                 self.graph_view.set_pixmap(pixmap)
             return
+
+        # Check for UMAP graphs
+        umap_hists = [name for name in visible_hists if name in self.graphs and self.graphs[name].get('type') == 'umap']
+        if umap_hists:
+            name = umap_hists[0]
+            pixmap = self.graphs[name].get('pixmap')
+            if pixmap:
+                self.graph_view.set_pixmap(pixmap)
+                return
 
         # Check for ridge plots
         ridge_hists = [name for name in visible_hists if name in self.graphs and self.graphs[name].get('type') == 'ridge']
@@ -2791,6 +3328,29 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Save Error", f"An error occurred while saving CSV: {str(e)}")
 
+    def _save_graph_png(self, name=None):
+        """Saves the current graph view or a specific graph as PNG."""
+        # If name is provided, we make sure it's visible first
+        if name and name in self.graphs:
+            if not self.image_handler.is_visible(name, is_graph=True):
+                self.image_handler.toggle_visibility(name, is_graph=True)
+                self.cached_composite = None
+                self._refresh_viewer() # This will call refresh_graph_view
+
+        if not hasattr(self, 'graph_view') or not self.graph_view.pixmap_item.pixmap() or self.graph_view.pixmap_item.pixmap().isNull():
+            QMessageBox.warning(self, "No Graph", "There is no graph currently displayed to save.")
+            return
+
+        default_name = f"{name}.png" if name else "graph.png"
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save Graph PNG", default_name, "PNG Files (*.png)")
+        if file_path:
+            try:
+                pixmap = self.graph_view.pixmap_item.pixmap()
+                pixmap.save(file_path, "PNG")
+                QMessageBox.information(self, "Save Complete", f"Successfully saved graph to {file_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Save Error", f"An error occurred while saving PNG: {str(e)}")
+
     def _save_group_graph_csv(self):
         """Exports all visible graphs into a single .csv file."""
         visible_hists = sorted(list(self.image_handler.visible_graphs))
@@ -2870,6 +3430,12 @@ class MainWindow(QMainWindow):
     def _create_status_bar(self):
         self.statusBar().showMessage("Ready")
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'background_label'):
+            self.background_label.resize(self.mdi_area.viewport().size())
+            self.background_label.move(0, 0)
+
 class GraphViewer(QGraphicsView):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2878,12 +3444,28 @@ class GraphViewer(QGraphicsView):
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
         self.setBackgroundRole(QPalette.NoRole)
         self.setFrameShape(QFrame.NoFrame)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
 
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
 
         self.pixmap_item = QGraphicsPixmapItem()
         self.scene.addItem(self.pixmap_item)
+
+    def _show_context_menu(self, position):
+        menu = QMenu()
+        save_action = QAction("Save as PNG", self)
+        
+        # Find MainWindow to call _save_graph_png
+        main_window = self.parent()
+        while main_window and not hasattr(main_window, '_save_graph_png'):
+            main_window = main_window.parent()
+            
+        if main_window:
+            save_action.triggered.connect(lambda: main_window._save_graph_png())
+            menu.addAction(save_action)
+            menu.exec(self.mapToGlobal(position))
 
     def set_pixmap(self, pixmap):
         if pixmap:

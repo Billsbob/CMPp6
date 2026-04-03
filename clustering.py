@@ -9,7 +9,36 @@ except ImportError:
     def is_cuda_available():
         return False
 
-def apply_kmeans(data, n_clusters=3, max_iter=300, tol=1e-4, init='k-means++', random_state=None):
+def prepare_features(data, include_coords=False, coord_weight=1.0):
+    """
+    Reshape image data into a feature vector for each pixel.
+    :param data: numpy array of shape (H, W) or (H, W, C)
+    :param include_coords: Whether to include (x, y) coordinates as features.
+    :param coord_weight: Scaling factor for coordinates.
+    :return: (features, h, w)
+    """
+    h, w = data.shape[:2]
+    if data.dtype != np.float32 and data.dtype != np.float64:
+        data_float = data.astype(np.float32)
+    else:
+        data_float = data
+
+    if data_float.ndim == 2:
+        features = data_float.reshape(-1, 1)
+    else:
+        features = data_float.reshape(-1, data_float.shape[2])
+
+    if include_coords:
+        y, x = np.mgrid[0:h, 0:w]
+        # Normalize coordinates to [0, 1] and apply weight
+        x = (x.astype(np.float32) / max(1, w - 1)) * coord_weight
+        y = (y.astype(np.float32) / max(1, h - 1)) * coord_weight
+        coords = np.stack([x.ravel(), y.ravel()], axis=-1)
+        features = np.hstack([features, coords])
+
+    return features, h, w
+
+def apply_kmeans(data, n_clusters=3, max_iter=300, tol=1e-4, init='k-means++', random_state=None, include_coords=False, coord_weight=1.0):
     """
     Apply K-Means clustering to the image data.
     :param data: numpy array of shape (H, W) or (H, W, C)
@@ -18,40 +47,22 @@ def apply_kmeans(data, n_clusters=3, max_iter=300, tol=1e-4, init='k-means++', r
     :param tol: tolerance
     :param init: initialization method ('k-means++' or 'random')
     :param random_state: random seed
+    :param include_coords: Whether to include (x, y) coordinates as features.
+    :param coord_weight: Scaling factor for coordinates.
     :return: cluster labels as a numpy array of shape (H, W)
     """
-    h, w = data.shape[:2]
-    # Ensure data is float for KMeans if it's not already
-    if data.dtype != np.float32 and data.dtype != np.float64:
-        data_float = data.astype(np.float32)
-    else:
-        data_float = data
-
-    if data_float.ndim == 2:
-        features = data_float.reshape(-1, 1)
-    else:
-        # If it's RGB, we might want to cluster based on all channels
-        features = data_float.reshape(-1, data_float.shape[2])
+    features, h, w = prepare_features(data, include_coords, coord_weight)
     
     kmeans = KMeans(n_clusters=n_clusters, max_iter=max_iter, tol=tol, init=init, random_state=random_state, n_init='auto')
     labels = kmeans.fit_predict(features)
     
     return labels.reshape(h, w)
 
-def apply_isodata(data, initial_clusters=3, max_iter=100, min_samples=20, max_stddev=10, min_dist=20, max_merge_pairs=2, random_state=None):
+def apply_isodata(data, initial_clusters=3, max_iter=100, min_samples=20, max_stddev=10, min_dist=20, max_merge_pairs=2, random_state=None, include_coords=False, coord_weight=1.0):
     """
     Apply ISODATA clustering to the image data.
     """
-    h, w = data.shape[:2]
-    if data.dtype != np.float32 and data.dtype != np.float64:
-        data_float = data.astype(np.float32)
-    else:
-        data_float = data
-
-    if data_float.ndim == 2:
-        features = data_float.reshape(-1, 1)
-    else:
-        features = data_float.reshape(-1, data_float.shape[2])
+    features, h, w = prepare_features(data, include_coords, coord_weight)
 
     rng = np.random.RandomState(random_state)
 
@@ -169,7 +180,7 @@ def apply_isodata(data, initial_clusters=3, max_iter=100, min_samples=20, max_st
     labels = np.argmin(distances, axis=1)
     return labels.reshape(h, w)
 
-def apply_dbscan(data, eps=0.5, min_samples=5, metric='euclidean', algorithm='auto', p=None):
+def apply_dbscan(data, eps=0.5, min_samples=5, metric='euclidean', algorithm='auto', p=None, include_coords=False, coord_weight=1.0):
     """
     Apply DBSCAN clustering to the image data.
     :param data: numpy array of shape (H, W) or (H, W, C)
@@ -178,38 +189,22 @@ def apply_dbscan(data, eps=0.5, min_samples=5, metric='euclidean', algorithm='au
     :param metric: The metric to use when calculating distance between instances in a feature array.
     :param algorithm: The algorithm to be used by the NearestNeighbors module to compute pointwise distances and find nearest neighbors.
     :param p: The power of the Minkowski metric to be used for the distance computation.
+    :param include_coords: Whether to include (x, y) coordinates as features.
+    :param coord_weight: Scaling factor for coordinates.
     :return: cluster labels as a numpy array of shape (H, W)
     """
-    h, w = data.shape[:2]
-    if data.dtype != np.float32 and data.dtype != np.float64:
-        data_float = data.astype(np.float32)
-    else:
-        data_float = data
-
-    if data_float.ndim == 2:
-        features = data_float.reshape(-1, 1)
-    else:
-        features = data_float.reshape(-1, data_float.shape[2])
+    features, h, w = prepare_features(data, include_coords, coord_weight)
 
     dbscan = DBSCAN(eps=eps, min_samples=min_samples, metric=metric, algorithm=algorithm, p=p)
     labels = dbscan.fit_predict(features)
 
     return labels.reshape(h, w)
 
-def apply_hdbscan(data, min_cluster_size=5, min_samples=None, cluster_selection_epsilon=0.0, max_cluster_size=None, metric='euclidean', metric_params=None, alpha=1.0, algorithm='auto', leaf_size=40, n_jobs=None, cluster_selection_method='eom', allow_single_cluster=False, store_centers=None, copy=False):
+def apply_hdbscan(data, min_cluster_size=5, min_samples=None, cluster_selection_epsilon=0.0, max_cluster_size=None, metric='euclidean', metric_params=None, alpha=1.0, algorithm='auto', leaf_size=40, n_jobs=None, cluster_selection_method='eom', allow_single_cluster=False, store_centers=None, copy=False, include_coords=False, coord_weight=1.0):
     """
     Apply HDBSCAN clustering to the image data.
     """
-    h, w = data.shape[:2]
-    if data.dtype != np.float32 and data.dtype != np.float64:
-        data_float = data.astype(np.float32)
-    else:
-        data_float = data
-
-    if data_float.ndim == 2:
-        features = data_float.reshape(-1, 1)
-    else:
-        features = data_float.reshape(-1, data_float.shape[2])
+    features, h, w = prepare_features(data, include_coords, coord_weight)
 
     hdbscan = HDBSCAN(
         min_cluster_size=min_cluster_size,
@@ -231,20 +226,11 @@ def apply_hdbscan(data, min_cluster_size=5, min_samples=None, cluster_selection_
 
     return labels.reshape(h, w)
 
-def apply_optics(data, min_samples=5, max_eps=np.inf, metric='minkowski', p=2, metric_params=None, cluster_method='xi', eps=None, xi=0.05, predecessor_correction=True, min_cluster_size=None, algorithm='auto', leaf_size=30, memory=None, n_jobs=None):
+def apply_optics(data, min_samples=5, max_eps=np.inf, metric='minkowski', p=2, metric_params=None, cluster_method='xi', eps=None, xi=0.05, predecessor_correction=True, min_cluster_size=None, algorithm='auto', leaf_size=30, memory=None, n_jobs=None, include_coords=False, coord_weight=1.0):
     """
     Apply OPTICS clustering to the image data.
     """
-    h, w = data.shape[:2]
-    if data.dtype != np.float32 and data.dtype != np.float64:
-        data_float = data.astype(np.float32)
-    else:
-        data_float = data
-
-    if data_float.ndim == 2:
-        features = data_float.reshape(-1, 1)
-    else:
-        features = data_float.reshape(-1, data_float.shape[2])
+    features, h, w = prepare_features(data, include_coords, coord_weight)
 
     optics = OPTICS(
         min_samples=min_samples,
