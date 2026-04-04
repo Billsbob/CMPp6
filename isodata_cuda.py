@@ -21,7 +21,7 @@ def is_cuda_available():
         logger.warning(f"CUDA device not accessible: {e}")
         return False
 
-def apply_isodata_cuda(data, initial_clusters=3, max_iter=100, min_samples=20, max_stddev=10, min_dist=20, max_merge_pairs=2, random_state=None, include_coords=False, coord_weight=1.0):
+def apply_isodata_cuda(data, initial_clusters=3, max_iter=100, min_samples=20, max_stddev=10, min_dist=20, max_merge_pairs=2, random_state=None, include_coords=False, coord_weight=1.0, mask=None):
     """
     Apply ISODATA clustering to the image data using CUDA (cupy).
     """
@@ -52,6 +52,17 @@ def apply_isodata_cuda(data, initial_clusters=3, max_iter=100, min_samples=20, m
         # Move to GPU
         features_gpu = cp.asarray(features)
     
+    mask_indices = None
+    if mask is not None:
+        if mask.ndim == 3:
+            mask = mask[:, :, 0]
+        mask_flat = cp.asarray(mask).ravel()
+        mask_indices = cp.where(mask_flat > 0)[0]
+        features_gpu = features_gpu[mask_indices]
+
+    if len(features_gpu) == 0:
+        return np.full((h, w), -9999, dtype=np.int32)
+
     rng = cp.random.RandomState(random_state)
 
     # 1. Initialize means
@@ -192,5 +203,10 @@ def apply_isodata_cuda(data, initial_clusters=3, max_iter=100, min_samples=20, m
     dist_sq = cp.maximum(dist_sq, 0)
     labels_gpu = cp.argmin(dist_sq, axis=1)
     
+    if mask_indices is not None:
+        full_labels = cp.full(h * w, -9999, dtype=cp.int32)
+        full_labels[mask_indices] = labels_gpu
+        return full_labels.reshape(h, w).get()
+
     labels = cp.asnumpy(labels_gpu)
     return labels.reshape(h, w)

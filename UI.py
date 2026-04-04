@@ -16,7 +16,7 @@ from PIL import Image
 from assets import AssetManager
 from image_handler import ImageDisplayHandler
 from graphs import calculate_normalized_graphs, create_graph_pixmap
-from clustering import apply_kmeans, apply_isodata, apply_dbscan, apply_hdbscan, apply_optics, apply_isodata_cuda, apply_dbscan_cuda, is_cuda_available
+from clustering import apply_kmeans, apply_isodata, apply_isodata_cuda, is_cuda_available
 
 class ZoomableView(QGraphicsView):
     def __init__(self, parent=None):
@@ -216,9 +216,10 @@ class FilterParameterDialog(QDialog):
         return self.params
 
 class KMeansParameterDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, mask_name=None):
         super().__init__(parent)
         self.setWindowTitle("K-Means Clustering Parameters")
+        self.mask_name = mask_name
         self.params = {
             "n_clusters": 3,
             "max_iter": 300,
@@ -226,13 +227,19 @@ class KMeansParameterDialog(QDialog):
             "init": "k-means++",
             "random_state": None,
             "include_coords": False,
-            "coord_weight": 1.0
+            "coord_weight": 1.0,
+            "use_roi": False
         }
         self.setup_ui()
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
         form_layout = QFormLayout()
+
+        if self.mask_name:
+            self.use_roi_cb = QCheckBox(f"Select to cluster under '{self.mask_name}'")
+            self.use_roi_cb.setChecked(self.params["use_roi"])
+            form_layout.addRow(self.use_roi_cb)
 
         self.n_clusters_spin = QSpinBox()
         self.n_clusters_spin.setRange(2, 20)
@@ -293,13 +300,15 @@ class KMeansParameterDialog(QDialog):
             "init": self.init_combo.currentText(),
             "random_state": random_state,
             "include_coords": self.include_coords_cb.isChecked(),
-            "coord_weight": self.coord_weight_spin.value()
+            "coord_weight": self.coord_weight_spin.value(),
+            "use_roi": self.use_roi_cb.isChecked() if hasattr(self, 'use_roi_cb') else False
         }
 
 class IsodataParameterDialog(QDialog):
-    def __init__(self, parent=None, is_cuda=False):
+    def __init__(self, parent=None, is_cuda=False, mask_name=None):
         super().__init__(parent)
         self.is_cuda = is_cuda
+        self.mask_name = mask_name
         if is_cuda:
             self.setWindowTitle("CUDA ISODATA Clustering Parameters")
         else:
@@ -313,13 +322,19 @@ class IsodataParameterDialog(QDialog):
             "max_merge_pairs": 2,
             "random_state": None,
             "include_coords": False,
-            "coord_weight": 1.0
+            "coord_weight": 1.0,
+            "use_roi": False
         }
         self.setup_ui()
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
         form_layout = QFormLayout()
+
+        if self.mask_name:
+            self.use_roi_cb = QCheckBox(f"Select to cluster under '{self.mask_name}'")
+            self.use_roi_cb.setChecked(self.params["use_roi"])
+            form_layout.addRow(self.use_roi_cb)
 
         self.initial_clusters_spin = QSpinBox()
         self.initial_clusters_spin.setRange(1, 100)
@@ -390,390 +405,12 @@ class IsodataParameterDialog(QDialog):
             "max_merge_pairs": self.max_merge_pairs_spin.value(),
             "random_state": random_state,
             "include_coords": self.include_coords_cb.isChecked(),
-            "coord_weight": self.coord_weight_spin.value()
+            "coord_weight": self.coord_weight_spin.value(),
+            "use_roi": self.use_roi_cb.isChecked() if hasattr(self, 'use_roi_cb') else False
         }
 
-class DBSCANParameterDialog(QDialog):
-    def __init__(self, parent=None, is_cuda=False):
-        super().__init__(parent)
-        self.is_cuda = is_cuda
-        if is_cuda:
-            self.setWindowTitle("CUDA DBSCAN Clustering Parameters")
-        else:
-            self.setWindowTitle("DBSCAN Clustering Parameters")
-        self.params = {
-            "eps": 0.5,
-            "min_samples": 5,
-            "metric": "euclidean",
-            "algorithm": "auto",
-            "p": 2,
-            "include_coords": False,
-            "coord_weight": 1.0
-        }
-        self.setup_ui()
 
-    def setup_ui(self):
-        layout = QVBoxLayout(self)
-        form_layout = QFormLayout()
 
-        self.eps_spin = QDoubleSpinBox()
-        self.eps_spin.setRange(0.001, 10000.0)
-        self.eps_spin.setSingleStep(0.1)
-        self.eps_spin.setValue(self.params["eps"])
-        form_layout.addRow("Epsilon (eps):", self.eps_spin)
-
-        self.min_samples_spin = QSpinBox()
-        self.min_samples_spin.setRange(1, 10000)
-        self.min_samples_spin.setValue(self.params["min_samples"])
-        form_layout.addRow("Minimum Samples:", self.min_samples_spin)
-
-        if not self.is_cuda:
-            self.metric_combo = QComboBox()
-            self.metric_combo.addItems(["euclidean", "manhattan", "chebyshev", "minkowski", "canberra", "braycurtis"])
-            self.metric_combo.setCurrentText(self.params["metric"])
-            form_layout.addRow("Metric:", self.metric_combo)
-
-            self.algorithm_combo = QComboBox()
-            self.algorithm_combo.addItems(["auto", "ball_tree", "kd_tree", "brute"])
-            self.algorithm_combo.setCurrentText(self.params["algorithm"])
-            form_layout.addRow("Algorithm:", self.algorithm_combo)
-
-            self.p_spin = QDoubleSpinBox()
-            self.p_spin.setRange(1.0, 100.0)
-            self.p_spin.setSingleStep(1.0)
-            self.p_spin.setValue(self.params["p"])
-            form_layout.addRow("P (Minkowski power):", self.p_spin)
-
-        self.include_coords_cb = QCheckBox("Include Coordinates (x, y)")
-        self.include_coords_cb.setChecked(self.params["include_coords"])
-        form_layout.addRow(self.include_coords_cb)
-
-        self.coord_weight_spin = QDoubleSpinBox()
-        self.coord_weight_spin.setRange(0.01, 100.0)
-        self.coord_weight_spin.setSingleStep(0.1)
-        self.coord_weight_spin.setValue(self.params["coord_weight"])
-        self.coord_weight_spin.setEnabled(self.params["include_coords"])
-        self.include_coords_cb.toggled.connect(self.coord_weight_spin.setEnabled)
-        form_layout.addRow("Coordinate Weight:", self.coord_weight_spin)
-
-        layout.addLayout(form_layout)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def get_params(self):
-        params = {
-            "eps": self.eps_spin.value(),
-            "min_samples": self.min_samples_spin.value(),
-            "include_coords": self.include_coords_cb.isChecked(),
-            "coord_weight": self.coord_weight_spin.value()
-        }
-        if not self.is_cuda:
-            params["metric"] = self.metric_combo.currentText()
-            params["algorithm"] = self.algorithm_combo.currentText()
-            params["p"] = self.p_spin.value()
-        return params
-
-class HDBSCANParameterDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("HDBSCAN Clustering Parameters")
-        self.params = {
-            "min_cluster_size": 5,
-            "min_samples": 5,
-            "cluster_selection_epsilon": 0.0,
-            "max_cluster_size": 0,
-            "metric": "euclidean",
-            "alpha": 1.0,
-            "algorithm": "auto",
-            "leaf_size": 40,
-            "n_jobs": -1,
-            "cluster_selection_method": "eom",
-            "allow_single_cluster": False,
-            "store_centers": "None",
-            "copy": False,
-            "include_coords": False,
-            "coord_weight": 1.0
-        }
-        self.setup_ui()
-
-    def setup_ui(self):
-        layout = QVBoxLayout(self)
-        form_layout = QFormLayout()
-
-        self.min_cluster_size_spin = QSpinBox()
-        self.min_cluster_size_spin.setRange(2, 10000)
-        self.min_cluster_size_spin.setValue(self.params["min_cluster_size"])
-        form_layout.addRow("Min Cluster Size:", self.min_cluster_size_spin)
-
-        self.min_samples_spin = QSpinBox()
-        self.min_samples_spin.setRange(1, 10000)
-        self.min_samples_spin.setValue(self.params["min_samples"])
-        form_layout.addRow("Min Samples:", self.min_samples_spin)
-
-        self.cluster_selection_epsilon_spin = QDoubleSpinBox()
-        self.cluster_selection_epsilon_spin.setRange(0.0, 1000.0)
-        self.cluster_selection_epsilon_spin.setSingleStep(0.1)
-        self.cluster_selection_epsilon_spin.setValue(self.params["cluster_selection_epsilon"])
-        form_layout.addRow("Cluster Selection Epsilon:", self.cluster_selection_epsilon_spin)
-
-        self.max_cluster_size_spin = QSpinBox()
-        self.max_cluster_size_spin.setRange(0, 1000000)
-        self.max_cluster_size_spin.setValue(self.params["max_cluster_size"])
-        form_layout.addRow("Max Cluster Size (0 for None):", self.max_cluster_size_spin)
-
-        self.metric_combo = QComboBox()
-        self.metric_combo.addItems(["euclidean", "manhattan", "chebyshev", "minkowski", "canberra", "braycurtis"])
-        self.metric_combo.setCurrentText(self.params["metric"])
-        form_layout.addRow("Metric:", self.metric_combo)
-
-        self.metric_params_edit = QLineEdit()
-        form_layout.addRow("Metric Parameters (JSON):", self.metric_params_edit)
-
-        self.alpha_spin = QDoubleSpinBox()
-        self.alpha_spin.setRange(0.1, 10.0)
-        self.alpha_spin.setSingleStep(0.1)
-        self.alpha_spin.setValue(self.params["alpha"])
-        form_layout.addRow("Alpha:", self.alpha_spin)
-
-        self.algorithm_combo = QComboBox()
-        self.algorithm_combo.addItems(["auto", "brute", "kd_tree", "ball_tree"])
-        self.algorithm_combo.setCurrentText(self.params["algorithm"])
-        form_layout.addRow("Algorithm:", self.algorithm_combo)
-
-        self.leaf_size_spin = QSpinBox()
-        self.leaf_size_spin.setRange(1, 1000)
-        self.leaf_size_spin.setValue(self.params["leaf_size"])
-        form_layout.addRow("Leaf Size:", self.leaf_size_spin)
-
-        self.n_jobs_spin = QSpinBox()
-        self.n_jobs_spin.setRange(-1, 128)
-        self.n_jobs_spin.setValue(self.params["n_jobs"])
-        form_layout.addRow("Number of Jobs (-1 for all):", self.n_jobs_spin)
-
-        self.cluster_selection_combo = QComboBox()
-        self.cluster_selection_combo.addItems(["eom", "leaf"])
-        self.cluster_selection_combo.setCurrentText(self.params["cluster_selection_method"])
-        form_layout.addRow("Cluster Selection:", self.cluster_selection_combo)
-
-        self.allow_single_cluster_check = QCheckBox()
-        self.allow_single_cluster_check.setChecked(self.params["allow_single_cluster"])
-        form_layout.addRow("Allow Single Cluster:", self.allow_single_cluster_check)
-
-        self.store_centers_combo = QComboBox()
-        self.store_centers_combo.addItems(["None", "centroid", "medoid", "both"])
-        self.store_centers_combo.setCurrentText(self.params["store_centers"])
-        form_layout.addRow("Store Centers:", self.store_centers_combo)
-
-        self.copy_check = QCheckBox()
-        self.copy_check.setChecked(self.params["copy"])
-        form_layout.addRow("Copy:", self.copy_check)
-
-        self.include_coords_cb = QCheckBox("Include Coordinates (x, y)")
-        self.include_coords_cb.setChecked(self.params["include_coords"])
-        form_layout.addRow(self.include_coords_cb)
-
-        self.coord_weight_spin = QDoubleSpinBox()
-        self.coord_weight_spin.setRange(0.01, 100.0)
-        self.coord_weight_spin.setSingleStep(0.1)
-        self.coord_weight_spin.setValue(self.params["coord_weight"])
-        self.coord_weight_spin.setEnabled(self.params["include_coords"])
-        self.include_coords_cb.toggled.connect(self.coord_weight_spin.setEnabled)
-        form_layout.addRow("Coordinate Weight:", self.coord_weight_spin)
-
-        layout.addLayout(form_layout)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def get_params(self):
-        import json
-        metric_params = None
-        if self.metric_params_edit.text().strip():
-            try:
-                metric_params = json.loads(self.metric_params_edit.text())
-            except:
-                pass
-
-        max_cluster_size = self.max_cluster_size_spin.value()
-        if max_cluster_size == 0:
-            max_cluster_size = None
-
-        store_centers = self.store_centers_combo.currentText()
-        if store_centers == "None":
-            store_centers = None
-
-        n_jobs = self.n_jobs_spin.value()
-        if n_jobs == 0:
-            n_jobs = None
-
-        return {
-            "min_cluster_size": self.min_cluster_size_spin.value(),
-            "min_samples": self.min_samples_spin.value(),
-            "cluster_selection_epsilon": self.cluster_selection_epsilon_spin.value(),
-            "max_cluster_size": max_cluster_size,
-            "metric": self.metric_combo.currentText(),
-            "metric_params": metric_params,
-            "alpha": self.alpha_spin.value(),
-            "algorithm": self.algorithm_combo.currentText(),
-            "leaf_size": self.leaf_size_spin.value(),
-            "n_jobs": n_jobs,
-            "cluster_selection_method": self.cluster_selection_combo.currentText(),
-            "allow_single_cluster": self.allow_single_cluster_check.isChecked(),
-            "store_centers": store_centers,
-            "copy": self.copy_check.isChecked(),
-            "include_coords": self.include_coords_cb.isChecked(),
-            "coord_weight": self.coord_weight_spin.value()
-        }
-
-class OPTICSParameterDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("OPTICS Clustering Parameters")
-        self.setup_ui()
-
-    def setup_ui(self):
-        layout = QVBoxLayout(self)
-        form_layout = QFormLayout()
-
-        self.min_samples_spin = QSpinBox()
-        self.min_samples_spin.setRange(1, 10000)
-        self.min_samples_spin.setValue(5)
-        form_layout.addRow("Min Samples:", self.min_samples_spin)
-
-        self.max_eps_spin = QDoubleSpinBox()
-        self.max_eps_spin.setRange(0.0, 1000000.0)
-        self.max_eps_spin.setValue(1000000.0)  # Use large value for inf
-        form_layout.addRow("Max Eps (Large for Inf):", self.max_eps_spin)
-
-        self.metric_combo = QComboBox()
-        self.metric_combo.addItems(["minkowski", "euclidean", "manhattan", "chebyshev", "canberra", "braycurtis"])
-        self.metric_combo.setCurrentText("minkowski")
-        form_layout.addRow("Metric:", self.metric_combo)
-
-        self.p_spin = QDoubleSpinBox()
-        self.p_spin.setRange(1.0, 10.0)
-        self.p_spin.setValue(2.0)
-        form_layout.addRow("P (for minkowski):", self.p_spin)
-
-        self.metric_params_edit = QLineEdit()
-        form_layout.addRow("Metric Parameters (JSON):", self.metric_params_edit)
-
-        self.cluster_method_combo = QComboBox()
-        self.cluster_method_combo.addItems(["xi", "dbscan"])
-        self.cluster_method_combo.setCurrentText("xi")
-        form_layout.addRow("Cluster Method:", self.cluster_method_combo)
-
-        self.eps_spin = QDoubleSpinBox()
-        self.eps_spin.setRange(0.0, 1000.0)
-        self.eps_spin.setValue(0.0)
-        form_layout.addRow("Eps (0 for None):", self.eps_spin)
-
-        self.xi_spin = QDoubleSpinBox()
-        self.xi_spin.setRange(0.0, 1.0)
-        self.xi_spin.setSingleStep(0.01)
-        self.xi_spin.setValue(0.05)
-        form_layout.addRow("Xi:", self.xi_spin)
-
-        self.predecessor_correction_check = QCheckBox()
-        self.predecessor_correction_check.setChecked(True)
-        form_layout.addRow("Predecessor Correction:", self.predecessor_correction_check)
-
-        self.min_cluster_size_spin = QSpinBox()
-        self.min_cluster_size_spin.setRange(0, 10000)
-        self.min_cluster_size_spin.setValue(0)
-        form_layout.addRow("Min Cluster Size (0 for None):", self.min_cluster_size_spin)
-
-        self.algorithm_combo = QComboBox()
-        self.algorithm_combo.addItems(["auto", "ball_tree", "kd_tree", "brute"])
-        self.algorithm_combo.setCurrentText("auto")
-        form_layout.addRow("Algorithm:", self.algorithm_combo)
-
-        self.leaf_size_spin = QSpinBox()
-        self.leaf_size_spin.setRange(1, 1000)
-        self.leaf_size_spin.setValue(30)
-        form_layout.addRow("Leaf Size:", self.leaf_size_spin)
-
-        self.memory_edit = QLineEdit()
-        form_layout.addRow("Memory (path or None):", self.memory_edit)
-
-        self.n_jobs_spin = QSpinBox()
-        self.n_jobs_spin.setRange(-1, 128)
-        self.n_jobs_spin.setValue(-1)
-        form_layout.addRow("Number of Jobs (-1 for all):", self.n_jobs_spin)
-
-        self.include_coords_cb = QCheckBox("Include Coordinates (x, y)")
-        self.include_coords_cb.setChecked(False)
-        form_layout.addRow(self.include_coords_cb)
-
-        self.coord_weight_spin = QDoubleSpinBox()
-        self.coord_weight_spin.setRange(0.01, 100.0)
-        self.coord_weight_spin.setSingleStep(0.1)
-        self.coord_weight_spin.setValue(1.0)
-        self.coord_weight_spin.setEnabled(False)
-        self.include_coords_cb.toggled.connect(self.coord_weight_spin.setEnabled)
-        form_layout.addRow("Coordinate Weight:", self.coord_weight_spin)
-
-        layout.addLayout(form_layout)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def get_params(self):
-        import json
-        import numpy as np
-        
-        metric_params = None
-        if self.metric_params_edit.text().strip():
-            try:
-                metric_params = json.loads(self.metric_params_edit.text())
-            except:
-                pass
-
-        max_eps = self.max_eps_spin.value()
-        if max_eps >= 1000000.0:
-            max_eps = np.inf
-
-        eps = self.eps_spin.value()
-        if eps == 0.0:
-            eps = None
-
-        min_cluster_size = self.min_cluster_size_spin.value()
-        if min_cluster_size == 0:
-            min_cluster_size = None
-
-        memory = self.memory_edit.text().strip()
-        if not memory or memory.lower() == "none":
-            memory = None
-
-        n_jobs = self.n_jobs_spin.value()
-        if n_jobs == 0:
-            n_jobs = None
-
-        return {
-            "min_samples": self.min_samples_spin.value(),
-            "max_eps": max_eps,
-            "metric": self.metric_combo.currentText(),
-            "p": self.p_spin.value(),
-            "metric_params": metric_params,
-            "cluster_method": self.cluster_method_combo.currentText(),
-            "eps": eps,
-            "xi": self.xi_spin.value(),
-            "predecessor_correction": self.predecessor_correction_check.isChecked(),
-            "min_cluster_size": min_cluster_size,
-            "algorithm": self.algorithm_combo.currentText(),
-            "leaf_size": self.leaf_size_spin.value(),
-            "memory": memory,
-            "n_jobs": n_jobs,
-            "include_coords": self.include_coords_cb.isChecked(),
-            "coord_weight": self.coord_weight_spin.value()
-        }
 
 class ScanpyParameterDialog(QDialog):
     def __init__(self, parent=None, is_leiden=False):
@@ -908,15 +545,19 @@ class ClusteringWorker(QThread):
     finished = Signal(object)  # labels
     error = Signal(str)
 
-    def __init__(self, clustering_func, data, params):
+    def __init__(self, clustering_func, data, params, mask_data=None):
         super().__init__()
         self.clustering_func = clustering_func
         self.data = data
         self.params = params
+        self.mask_data = mask_data
 
     def run(self):
         try:
-            labels = self.clustering_func(self.data, **self.params)
+            if self.mask_data is not None:
+                labels = self.clustering_func(self.data, mask=self.mask_data, **self.params)
+            else:
+                labels = self.clustering_func(self.data, **self.params)
             self.finished.emit(labels)
         except Exception as e:
             self.error.emit(str(e))
@@ -1219,24 +860,6 @@ class MainWindow(QMainWindow):
             cuda_isodata_action.setToolTip("CUDA not available")
         cluster_menu.addAction(cuda_isodata_action)
 
-        dbscan_action = QAction("DBSCAN", self)
-        dbscan_action.triggered.connect(self._apply_dbscan_triggered)
-        cluster_menu.addAction(dbscan_action)
-
-        cuda_dbscan_action = QAction("CUDA DBSCAN", self)
-        cuda_dbscan_action.triggered.connect(self._apply_cuda_dbscan_triggered)
-        if not is_cuda_available():
-            cuda_dbscan_action.setEnabled(False)
-            cuda_dbscan_action.setToolTip("CUDA not available")
-        cluster_menu.addAction(cuda_dbscan_action)
-
-        hdbscan_action = QAction("HDBSCAN", self)
-        hdbscan_action.triggered.connect(self._apply_hdbscan_triggered)
-        cluster_menu.addAction(hdbscan_action)
-
-        optics_action = QAction("OPTICS", self)
-        optics_action.triggered.connect(self._apply_optics_triggered)
-        cluster_menu.addAction(optics_action)
 
         # "kNN+L" submenu under "Clustering"
         knnl_menu = cluster_menu.addMenu("kNN+L")
@@ -1639,17 +1262,30 @@ class MainWindow(QMainWindow):
             self.cached_composite = None
             self._refresh_viewer()
 
-    def _on_clustering_finished(self, labels, prefix, method_name):
+    def _on_clustering_finished(self, labels, prefix, method_name, roi_mask_name=None):
         # Create masks for each cluster
-        home_folder_name = os.path.basename(self.working_dir) if self.working_dir else "Project"
         unique_labels = np.unique(labels)
         
+        # If labels are sparse due to ROI, labels will have original shape but only ROI pixels set.
+        # Actually, my ClusteringWorker should probably return labels for all pixels, with a special value for non-ROI.
+        # Or I handle it here.
+        
+        # Determine base name
+        if roi_mask_name:
+            # Example: KC_05 becomes KC_05_
+            base_name = f"{roi_mask_name}_"
+        else:
+            base_name = f"{prefix}_"
+
         for i, label in enumerate(unique_labels):
+            if label == -9999: # Special value for non-ROI
+                continue
+                
             cluster_mask = (labels == label).astype(np.uint8) * 255
             if label == -1:
-                mask_name = f"{home_folder_name}_{prefix}_Noise"
+                mask_name = f"{base_name}Noise"
             else:
-                mask_name = f"{home_folder_name}_{prefix}_{i:02d}"
+                mask_name = f"{base_name}{i:02d}"
             
             # Create mask asset and add to manager
             self.asset_manager.add_new_mask(mask_name, cluster_mask)
@@ -1674,15 +1310,19 @@ class MainWindow(QMainWindow):
 
     def _apply_kmeans_triggered(self):
         visible_names = list(self.image_handler.visible_assets)
+        visible_masks = list(self.image_handler.visible_masks)
+        
         if not visible_names:
             QMessageBox.information(self, "No Images Visible", "Please toggle at least one image visible for clustering.")
             return
 
-        dialog = KMeansParameterDialog(self)
+        mask_name = visible_masks[0] if len(visible_masks) == 1 else None
+        dialog = KMeansParameterDialog(self, mask_name=mask_name)
         if dialog.exec() != QDialog.Accepted:
             return
 
         params = dialog.get_params()
+        use_roi = params.pop("use_roi", False)
         
         # Collect data from visible images
         stack = []
@@ -1708,11 +1348,21 @@ class MainWindow(QMainWindow):
         else:
             combined_data = stack[0]
 
+        roi_mask_data = None
+        if use_roi and mask_name:
+            mask_asset = self.asset_manager.get_mask_by_name(mask_name)
+            if mask_asset:
+                roi_mask_data = mask_asset.data
+                if roi_mask_data is not None:
+                    if roi_mask_data.shape[:2] != target_shape[:2]:
+                        QMessageBox.warning(self, "Shape Mismatch", f"Mask '{mask_name}' shape {roi_mask_data.shape[:2]} does not match image shape {target_shape[:2]}. ROI clustering disabled.")
+                        roi_mask_data = None
+
         try:
             self.statusBar().showMessage("Running K-Means clustering...")
-            self.worker = ClusteringWorker(apply_kmeans, combined_data, params)
+            self.worker = ClusteringWorker(apply_kmeans, combined_data, params, mask_data=roi_mask_data)
             self.stop_action.setEnabled(True)
-            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "KC", "K-Means"))
+            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "KC", "K-Means", roi_mask_name=mask_name if use_roi else None))
             self.worker.error.connect(self._on_worker_error)
             self.worker.start()
             
@@ -1721,15 +1371,19 @@ class MainWindow(QMainWindow):
 
     def _apply_isodata_triggered(self):
         visible_names = list(self.image_handler.visible_assets)
+        visible_masks = list(self.image_handler.visible_masks)
+        
         if not visible_names:
             QMessageBox.information(self, "No Images Visible", "Please toggle at least one image visible for clustering.")
             return
 
-        dialog = IsodataParameterDialog(self)
+        mask_name = visible_masks[0] if len(visible_masks) == 1 else None
+        dialog = IsodataParameterDialog(self, mask_name=mask_name)
         if dialog.exec() != QDialog.Accepted:
             return
 
         params = dialog.get_params()
+        use_roi = params.pop("use_roi", False)
         
         # Collect data from visible images
         stack = []
@@ -1754,11 +1408,21 @@ class MainWindow(QMainWindow):
         else:
             combined_data = stack[0]
 
+        roi_mask_data = None
+        if use_roi and mask_name:
+            mask_asset = self.asset_manager.get_mask_by_name(mask_name)
+            if mask_asset:
+                roi_mask_data = mask_asset.data
+                if roi_mask_data is not None:
+                    if roi_mask_data.shape[:2] != target_shape[:2]:
+                        QMessageBox.warning(self, "Shape Mismatch", f"Mask '{mask_name}' shape {roi_mask_data.shape[:2]} does not match image shape {target_shape[:2]}. ROI clustering disabled.")
+                        roi_mask_data = None
+
         try:
             self.statusBar().showMessage("Running ISODATA clustering...")
-            self.worker = ClusteringWorker(apply_isodata, combined_data, params)
+            self.worker = ClusteringWorker(apply_isodata, combined_data, params, mask_data=roi_mask_data)
             self.stop_action.setEnabled(True)
-            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "IC", "ISODATA"))
+            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "IC", "ISODATA", roi_mask_name=mask_name if use_roi else None))
             self.worker.error.connect(self._on_worker_error)
             self.worker.start()
             
@@ -1767,15 +1431,19 @@ class MainWindow(QMainWindow):
 
     def _apply_cuda_isodata_triggered(self):
         visible_names = list(self.image_handler.visible_assets)
+        visible_masks = list(self.image_handler.visible_masks)
+
         if not visible_names:
             QMessageBox.information(self, "No Images Visible", "Please toggle at least one image visible for clustering.")
             return
 
-        dialog = IsodataParameterDialog(self, is_cuda=True)
+        mask_name = visible_masks[0] if len(visible_masks) == 1 else None
+        dialog = IsodataParameterDialog(self, is_cuda=True, mask_name=mask_name)
         if dialog.exec() != QDialog.Accepted:
             return
 
         params = dialog.get_params()
+        use_roi = params.pop("use_roi", False)
         
         # Collect data from visible images
         stack = []
@@ -1800,200 +1468,27 @@ class MainWindow(QMainWindow):
         else:
             combined_data = stack[0]
 
+        roi_mask_data = None
+        if use_roi and mask_name:
+            mask_asset = self.asset_manager.get_mask_by_name(mask_name)
+            if mask_asset:
+                roi_mask_data = mask_asset.data
+                if roi_mask_data is not None:
+                    if roi_mask_data.shape[:2] != target_shape[:2]:
+                        QMessageBox.warning(self, "Shape Mismatch", f"Mask '{mask_name}' shape {roi_mask_data.shape[:2]} does not match image shape {target_shape[:2]}. ROI clustering disabled.")
+                        roi_mask_data = None
+
         try:
             self.statusBar().showMessage("Running CUDA ISODATA clustering...")
-            self.worker = ClusteringWorker(apply_isodata_cuda, combined_data, params)
+            self.worker = ClusteringWorker(apply_isodata_cuda, combined_data, params, mask_data=roi_mask_data)
             self.stop_action.setEnabled(True)
-            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "CUDA_IC", "CUDA ISODATA"))
+            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "IC", "CUDA ISODATA", roi_mask_name=mask_name if use_roi else None))
             self.worker.error.connect(self._on_worker_error)
             self.worker.start()
             
         except Exception as e:
             QMessageBox.critical(self, "CUDA ISODATA Error", f"An error occurred during clustering: {str(e)}")
 
-    def _apply_dbscan_triggered(self):
-        visible_names = list(self.image_handler.visible_assets)
-        if not visible_names:
-            QMessageBox.information(self, "No Images Visible", "Please toggle at least one image visible for clustering.")
-            return
-
-        dialog = DBSCANParameterDialog(self)
-        if dialog.exec() != QDialog.Accepted:
-            return
-
-        params = dialog.get_params()
-        
-        # Collect data from visible images
-        stack = []
-        target_shape = None
-        for name in sorted(visible_names):
-            image_asset, _ = self.asset_manager.get_asset_pair(name)
-            if image_asset:
-                data = image_asset.get_rendered_data(for_clustering=True)
-                if data is not None:
-                    if target_shape is None:
-                        target_shape = data.shape
-                    elif data.shape != target_shape:
-                        continue
-                    stack.append(data)
-        
-        if not stack:
-            return
-            
-        # Combine stacked data if multiple images
-        if len(stack) > 1:
-            combined_data = np.stack([s.astype(np.float32) for s in stack], axis=-1)
-        else:
-            combined_data = stack[0]
-
-        try:
-            self.statusBar().showMessage("Running DBSCAN clustering...")
-            self.worker = ClusteringWorker(apply_dbscan, combined_data, params)
-            self.stop_action.setEnabled(True)
-            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "DC", "DBSCAN"))
-            self.worker.error.connect(self._on_worker_error)
-            self.worker.start()
-            
-        except Exception as e:
-            QMessageBox.critical(self, "DBSCAN Error", f"An error occurred during clustering: {str(e)}")
-
-    def _apply_cuda_dbscan_triggered(self):
-        visible_names = list(self.image_handler.visible_assets)
-        if not visible_names:
-            QMessageBox.information(self, "No Images Visible", "Please toggle at least one image visible for clustering.")
-            return
-
-        dialog = DBSCANParameterDialog(self, is_cuda=True)
-        if dialog.exec() != QDialog.Accepted:
-            return
-
-        params = dialog.get_params()
-        
-        # Collect data from visible images
-        stack = []
-        target_shape = None
-        for name in sorted(visible_names):
-            image_asset, _ = self.asset_manager.get_asset_pair(name)
-            if image_asset:
-                data = image_asset.get_rendered_data(for_clustering=True)
-                if data is not None:
-                    if target_shape is None:
-                        target_shape = data.shape
-                    elif data.shape != target_shape:
-                        continue
-                    stack.append(data)
-        
-        if not stack:
-            return
-            
-        # Combine stacked data if multiple images
-        if len(stack) > 1:
-            combined_data = np.stack([s.astype(np.float32) for s in stack], axis=-1)
-        else:
-            combined_data = stack[0]
-
-        try:
-            self.statusBar().showMessage("Running CUDA DBSCAN clustering...")
-            self.worker = ClusteringWorker(apply_dbscan_cuda, combined_data, params)
-            self.stop_action.setEnabled(True)
-            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "CUDA_DC", "CUDA DBSCAN"))
-            self.worker.error.connect(self._on_worker_error)
-            self.worker.start()
-            
-        except Exception as e:
-            QMessageBox.critical(self, "CUDA DBSCAN Error", f"An error occurred during clustering: {str(e)}")
-
-    def _apply_hdbscan_triggered(self):
-        visible_names = list(self.image_handler.visible_assets)
-        if not visible_names:
-            QMessageBox.information(self, "No Images Visible", "Please toggle at least one image visible for clustering.")
-            return
-
-        dialog = HDBSCANParameterDialog(self)
-        if dialog.exec() != QDialog.Accepted:
-            return
-
-        params = dialog.get_params()
-        
-        # Collect data from visible images
-        stack = []
-        target_shape = None
-        for name in sorted(visible_names):
-            image_asset, _ = self.asset_manager.get_asset_pair(name)
-            if image_asset:
-                data = image_asset.get_rendered_data(for_clustering=True)
-                if data is not None:
-                    if target_shape is None:
-                        target_shape = data.shape
-                    elif data.shape != target_shape:
-                        continue
-                    stack.append(data)
-        
-        if not stack:
-            return
-            
-        # Combine stacked data if multiple images
-        if len(stack) > 1:
-            combined_data = np.stack([s.astype(np.float32) for s in stack], axis=-1)
-        else:
-            combined_data = stack[0]
-
-        try:
-            self.statusBar().showMessage("Running HDBSCAN clustering...")
-            self.worker = ClusteringWorker(apply_hdbscan, combined_data, params)
-            self.stop_action.setEnabled(True)
-            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "HC", "HDBSCAN"))
-            self.worker.error.connect(self._on_worker_error)
-            self.worker.start()
-            
-        except Exception as e:
-            QMessageBox.critical(self, "HDBSCAN Error", f"An error occurred during clustering: {str(e)}")
-
-    def _apply_optics_triggered(self):
-        visible_names = list(self.image_handler.visible_assets)
-        if not visible_names:
-            QMessageBox.information(self, "No Images Visible", "Please toggle at least one image visible for clustering.")
-            return
-
-        dialog = OPTICSParameterDialog(self)
-        if dialog.exec() != QDialog.Accepted:
-            return
-
-        params = dialog.get_params()
-        
-        # Collect data from visible images
-        stack = []
-        target_shape = None
-        for name in sorted(visible_names):
-            image_asset, _ = self.asset_manager.get_asset_pair(name)
-            if image_asset:
-                data = image_asset.get_rendered_data(for_clustering=True)
-                if data is not None:
-                    if target_shape is None:
-                        target_shape = data.shape
-                    elif data.shape != target_shape:
-                        continue
-                    stack.append(data)
-        
-        if not stack:
-            return
-            
-        # Combine stacked data if multiple images
-        if len(stack) > 1:
-            combined_data = np.stack([s.astype(np.float32) for s in stack], axis=-1)
-        else:
-            combined_data = stack[0]
-
-        try:
-            self.statusBar().showMessage("Running OPTICS clustering...")
-            self.worker = ClusteringWorker(apply_optics, combined_data, params)
-            self.stop_action.setEnabled(True)
-            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "OC", "OPTICS"))
-            self.worker.error.connect(self._on_worker_error)
-            self.worker.start()
-            
-        except Exception as e:
-            QMessageBox.critical(self, "OPTICS Error", f"An error occurred during clustering: {str(e)}")
 
     def _apply_scanpy_knn_triggered(self):
         visible_names = sorted(list(self.image_handler.visible_assets))
@@ -2146,7 +1641,7 @@ class MainWindow(QMainWindow):
                         
                         mask_data[ys, xs] = 255
                         
-                        mask_name = f"{img_name}_Leiden_{cluster_id}"
+                        mask_name = f"LC_{int(cluster_id):02d}"
                         self.asset_manager.add_new_mask(mask_name, mask_data)
                 
                 self._update_asset_list()

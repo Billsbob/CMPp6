@@ -1,21 +1,20 @@
 import numpy as np
-from sklearn.cluster import KMeans, DBSCAN, HDBSCAN, OPTICS
+from sklearn.cluster import KMeans
 try:
     from isodata_cuda import apply_isodata_cuda, is_cuda_available
-    from dbscan_cuda import apply_dbscan_cuda
 except ImportError:
     apply_isodata_cuda = None
-    apply_dbscan_cuda = None
     def is_cuda_available():
         return False
 
-def prepare_features(data, include_coords=False, coord_weight=1.0):
+def prepare_features(data, include_coords=False, coord_weight=1.0, mask=None):
     """
     Reshape image data into a feature vector for each pixel.
     :param data: numpy array of shape (H, W) or (H, W, C)
     :param include_coords: Whether to include (x, y) coordinates as features.
     :param coord_weight: Scaling factor for coordinates.
-    :return: (features, h, w)
+    :param mask: Optional mask of shape (H, W) or (H, W, 1). If provided, only pixels where mask > 0 are included.
+    :return: (features, h, w, mask_indices)
     """
     h, w = data.shape[:2]
     if data.dtype != np.float32 and data.dtype != np.float64:
@@ -36,33 +35,43 @@ def prepare_features(data, include_coords=False, coord_weight=1.0):
         coords = np.stack([x.ravel(), y.ravel()], axis=-1)
         features = np.hstack([features, coords])
 
-    return features, h, w
+    mask_indices = None
+    if mask is not None:
+        if mask.ndim == 3:
+            mask = mask[:, :, 0]
+        mask_flat = mask.ravel()
+        mask_indices = np.where(mask_flat > 0)[0]
+        features = features[mask_indices]
 
-def apply_kmeans(data, n_clusters=3, max_iter=300, tol=1e-4, init='k-means++', random_state=None, include_coords=False, coord_weight=1.0):
+    return features, h, w, mask_indices
+
+def apply_kmeans(data, n_clusters=3, max_iter=300, tol=1e-4, init='k-means++', random_state=None, include_coords=False, coord_weight=1.0, mask=None):
     """
     Apply K-Means clustering to the image data.
-    :param data: numpy array of shape (H, W) or (H, W, C)
-    :param n_clusters: number of clusters
-    :param max_iter: maximum number of iterations
-    :param tol: tolerance
-    :param init: initialization method ('k-means++' or 'random')
-    :param random_state: random seed
-    :param include_coords: Whether to include (x, y) coordinates as features.
-    :param coord_weight: Scaling factor for coordinates.
-    :return: cluster labels as a numpy array of shape (H, W)
     """
-    features, h, w = prepare_features(data, include_coords, coord_weight)
+    features, h, w, mask_indices = prepare_features(data, include_coords, coord_weight, mask)
     
+    if len(features) == 0:
+        return np.full((h, w), -9999, dtype=np.int32)
+
     kmeans = KMeans(n_clusters=n_clusters, max_iter=max_iter, tol=tol, init=init, random_state=random_state, n_init='auto')
     labels = kmeans.fit_predict(features)
     
+    if mask_indices is not None:
+        full_labels = np.full(h * w, -9999, dtype=np.int32)
+        full_labels[mask_indices] = labels
+        return full_labels.reshape(h, w)
+    
     return labels.reshape(h, w)
 
-def apply_isodata(data, initial_clusters=3, max_iter=100, min_samples=20, max_stddev=10, min_dist=20, max_merge_pairs=2, random_state=None, include_coords=False, coord_weight=1.0):
+def apply_isodata(data, initial_clusters=3, max_iter=100, min_samples=20, max_stddev=10, min_dist=20, max_merge_pairs=2, random_state=None, include_coords=False, coord_weight=1.0, mask=None):
     """
     Apply ISODATA clustering to the image data.
     """
-    features, h, w = prepare_features(data, include_coords, coord_weight)
+    features, h, w, mask_indices = prepare_features(data, include_coords, coord_weight, mask)
+
+    if len(features) == 0:
+        return np.full((h, w), -9999, dtype=np.int32)
 
     rng = np.random.RandomState(random_state)
 
@@ -178,76 +187,13 @@ def apply_isodata(data, initial_clusters=3, max_iter=100, min_samples=20, max_st
     # Final assignment
     distances = np.linalg.norm(features[:, np.newaxis] - means, axis=2)
     labels = np.argmin(distances, axis=1)
-    return labels.reshape(h, w)
 
-def apply_dbscan(data, eps=0.5, min_samples=5, metric='euclidean', algorithm='auto', p=None, include_coords=False, coord_weight=1.0):
-    """
-    Apply DBSCAN clustering to the image data.
-    :param data: numpy array of shape (H, W) or (H, W, C)
-    :param eps: The maximum distance between two samples for one to be considered as in the neighborhood of the other.
-    :param min_samples: The number of samples (or total weight) in a neighborhood for a point to be considered as a core point.
-    :param metric: The metric to use when calculating distance between instances in a feature array.
-    :param algorithm: The algorithm to be used by the NearestNeighbors module to compute pointwise distances and find nearest neighbors.
-    :param p: The power of the Minkowski metric to be used for the distance computation.
-    :param include_coords: Whether to include (x, y) coordinates as features.
-    :param coord_weight: Scaling factor for coordinates.
-    :return: cluster labels as a numpy array of shape (H, W)
-    """
-    features, h, w = prepare_features(data, include_coords, coord_weight)
-
-    dbscan = DBSCAN(eps=eps, min_samples=min_samples, metric=metric, algorithm=algorithm, p=p)
-    labels = dbscan.fit_predict(features)
+    if mask_indices is not None:
+        full_labels = np.full(h * w, -9999, dtype=np.int32)
+        full_labels[mask_indices] = labels
+        return full_labels.reshape(h, w)
 
     return labels.reshape(h, w)
 
-def apply_hdbscan(data, min_cluster_size=5, min_samples=None, cluster_selection_epsilon=0.0, max_cluster_size=None, metric='euclidean', metric_params=None, alpha=1.0, algorithm='auto', leaf_size=40, n_jobs=None, cluster_selection_method='eom', allow_single_cluster=False, store_centers=None, copy=False, include_coords=False, coord_weight=1.0):
-    """
-    Apply HDBSCAN clustering to the image data.
-    """
-    features, h, w = prepare_features(data, include_coords, coord_weight)
 
-    hdbscan = HDBSCAN(
-        min_cluster_size=min_cluster_size,
-        min_samples=min_samples,
-        cluster_selection_epsilon=cluster_selection_epsilon,
-        max_cluster_size=max_cluster_size,
-        metric=metric,
-        metric_params=metric_params,
-        alpha=alpha,
-        algorithm=algorithm,
-        leaf_size=leaf_size,
-        n_jobs=n_jobs,
-        cluster_selection_method=cluster_selection_method,
-        allow_single_cluster=allow_single_cluster,
-        store_centers=store_centers,
-        copy=copy
-    )
-    labels = hdbscan.fit_predict(features)
 
-    return labels.reshape(h, w)
-
-def apply_optics(data, min_samples=5, max_eps=np.inf, metric='minkowski', p=2, metric_params=None, cluster_method='xi', eps=None, xi=0.05, predecessor_correction=True, min_cluster_size=None, algorithm='auto', leaf_size=30, memory=None, n_jobs=None, include_coords=False, coord_weight=1.0):
-    """
-    Apply OPTICS clustering to the image data.
-    """
-    features, h, w = prepare_features(data, include_coords, coord_weight)
-
-    optics = OPTICS(
-        min_samples=min_samples,
-        max_eps=max_eps,
-        metric=metric,
-        p=p,
-        metric_params=metric_params,
-        cluster_method=cluster_method,
-        eps=eps,
-        xi=xi,
-        predecessor_correction=predecessor_correction,
-        min_cluster_size=min_cluster_size,
-        algorithm=algorithm,
-        leaf_size=leaf_size,
-        memory=memory,
-        n_jobs=n_jobs
-    )
-    labels = optics.fit_predict(features)
-
-    return labels.reshape(h, w)

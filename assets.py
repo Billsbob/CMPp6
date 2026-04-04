@@ -203,8 +203,27 @@ class Asset:
                     display_data = np.zeros_like(data, dtype=np.uint8)
             
             display_data = np.ascontiguousarray(display_data)
-            height, width = display_data.shape
-            qimg = QImage(display_data.data, width, height, display_data.strides[0], QImage.Format_Grayscale8)
+            
+            if len(display_data.shape) == 2:
+                height, width = display_data.shape
+                format = QImage.Format_Grayscale8
+            elif len(display_data.shape) == 3:
+                height, width, channels = display_data.shape
+                if channels == 3:
+                    format = QImage.Format_RGB888
+                elif channels == 4:
+                    format = QImage.Format_RGBA8888
+                else:
+                    # Default to Grayscale8 and take only the first channel if unknown multichannel
+                    display_data = np.ascontiguousarray(display_data[:, :, 0])
+                    height, width = display_data.shape
+                    format = QImage.Format_Grayscale8
+            else:
+                # Fallback for other dimensions
+                height, width = display_data.shape[:2]
+                format = QImage.Format_Grayscale8
+
+            qimg = QImage(display_data.data, width, height, display_data.strides[0], format)
             qimg.ndarray = display_data
             return qimg.copy()
 

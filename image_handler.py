@@ -404,7 +404,7 @@ class ImageDisplayHandler:
             color_rgb = self.COLORS.get(color_name, (1, 1, 1))
             opacity = mask_asset.pipeline.config.get("opacity", self.mask_opacity)
             
-            h, w = data.shape
+            h, w = data.shape[:2]
             
             if ext == 'tif':
                 # For TIF masks, we can save them as colored or just bitmask.
