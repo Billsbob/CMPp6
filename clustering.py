@@ -1,11 +1,7 @@
 import numpy as np
 from sklearn.cluster import KMeans
-try:
-    from isodata_cuda import apply_isodata_cuda, is_cuda_available
-except ImportError:
-    apply_isodata_cuda = None
-    def is_cuda_available():
-        return False
+def is_cuda_available():
+    return False
 
 def prepare_features(data, include_coords=False, coord_weight=1.0, mask=None):
     """

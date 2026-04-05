@@ -16,7 +16,7 @@ from PIL import Image
 from assets import AssetManager
 from image_handler import ImageDisplayHandler
 from graphs import calculate_normalized_graphs, create_graph_pixmap
-from clustering import apply_kmeans, apply_isodata, apply_isodata_cuda, is_cuda_available
+from clustering import apply_kmeans, apply_isodata, is_cuda_available
 
 class ZoomableView(QGraphicsView):
     def __init__(self, parent=None):
@@ -305,14 +305,10 @@ class KMeansParameterDialog(QDialog):
         }
 
 class IsodataParameterDialog(QDialog):
-    def __init__(self, parent=None, is_cuda=False, mask_name=None):
+    def __init__(self, parent=None, mask_name=None):
         super().__init__(parent)
-        self.is_cuda = is_cuda
         self.mask_name = mask_name
-        if is_cuda:
-            self.setWindowTitle("CUDA ISODATA Clustering Parameters")
-        else:
-            self.setWindowTitle("ISODATA Clustering Parameters")
+        self.setWindowTitle("ISODATA Clustering Parameters")
         self.params = {
             "initial_clusters": 3,
             "max_iter": 100,
@@ -654,7 +650,7 @@ class MainWindow(QMainWindow):
         self._create_menu_bar()
         self._create_status_bar()
         self._setup_ui()
-
+        
     def _setup_ui(self):
         # Create the MDI workspace
         self.mdi_area = QMdiArea()
@@ -663,7 +659,7 @@ class MainWindow(QMainWindow):
         # Background message for the MDI area
         self.background_label = QLabel(self.mdi_area.viewport())
         self.background_label.setAlignment(Qt.AlignCenter)
-        self.background_label.setStyleSheet("color: #888888; font-size: 18px; background: transparent; padding: 20px;")
+        self.background_label.setStyleSheet("color: black; font-size: 18px; background: white; padding: 20px;")
         self.background_label.setText(
             "1.  Click 'Home' and navigate to your image folder.\n\n"
             "2.  Select images in left-column to appear in Image window.\n"
@@ -852,14 +848,6 @@ class MainWindow(QMainWindow):
         isodata_action = QAction("ISODATA", self)
         isodata_action.triggered.connect(self._apply_isodata_triggered)
         cluster_menu.addAction(isodata_action)
-
-        cuda_isodata_action = QAction("CUDA ISODATA", self)
-        cuda_isodata_action.triggered.connect(self._apply_cuda_isodata_triggered)
-        if not is_cuda_available():
-            cuda_isodata_action.setEnabled(False)
-            cuda_isodata_action.setToolTip("CUDA not available")
-        cluster_menu.addAction(cuda_isodata_action)
-
 
         # "kNN+L" submenu under "Clustering"
         knnl_menu = cluster_menu.addMenu("kNN+L")
@@ -1428,67 +1416,6 @@ class MainWindow(QMainWindow):
             
         except Exception as e:
             QMessageBox.critical(self, "ISODATA Error", f"An error occurred during clustering: {str(e)}")
-
-    def _apply_cuda_isodata_triggered(self):
-        visible_names = list(self.image_handler.visible_assets)
-        visible_masks = list(self.image_handler.visible_masks)
-
-        if not visible_names:
-            QMessageBox.information(self, "No Images Visible", "Please toggle at least one image visible for clustering.")
-            return
-
-        mask_name = visible_masks[0] if len(visible_masks) == 1 else None
-        dialog = IsodataParameterDialog(self, is_cuda=True, mask_name=mask_name)
-        if dialog.exec() != QDialog.Accepted:
-            return
-
-        params = dialog.get_params()
-        use_roi = params.pop("use_roi", False)
-        
-        # Collect data from visible images
-        stack = []
-        target_shape = None
-        for name in sorted(visible_names):
-            image_asset, _ = self.asset_manager.get_asset_pair(name)
-            if image_asset:
-                data = image_asset.get_rendered_data(for_clustering=True)
-                if data is not None:
-                    if target_shape is None:
-                        target_shape = data.shape
-                    elif data.shape != target_shape:
-                        continue
-                    stack.append(data)
-        
-        if not stack:
-            return
-            
-        # Combine stacked data if multiple images
-        if len(stack) > 1:
-            combined_data = np.stack([s.astype(np.float32) for s in stack], axis=-1)
-        else:
-            combined_data = stack[0]
-
-        roi_mask_data = None
-        if use_roi and mask_name:
-            mask_asset = self.asset_manager.get_mask_by_name(mask_name)
-            if mask_asset:
-                roi_mask_data = mask_asset.data
-                if roi_mask_data is not None:
-                    if roi_mask_data.shape[:2] != target_shape[:2]:
-                        QMessageBox.warning(self, "Shape Mismatch", f"Mask '{mask_name}' shape {roi_mask_data.shape[:2]} does not match image shape {target_shape[:2]}. ROI clustering disabled.")
-                        roi_mask_data = None
-
-        try:
-            self.statusBar().showMessage("Running CUDA ISODATA clustering...")
-            self.worker = ClusteringWorker(apply_isodata_cuda, combined_data, params, mask_data=roi_mask_data)
-            self.stop_action.setEnabled(True)
-            self.worker.finished.connect(lambda labels: self._on_clustering_finished(labels, "IC", "CUDA ISODATA", roi_mask_name=mask_name if use_roi else None))
-            self.worker.error.connect(self._on_worker_error)
-            self.worker.start()
-            
-        except Exception as e:
-            QMessageBox.critical(self, "CUDA ISODATA Error", f"An error occurred during clustering: {str(e)}")
-
 
     def _apply_scanpy_knn_triggered(self):
         visible_names = sorted(list(self.image_handler.visible_assets))
