@@ -1,195 +1,151 @@
 import numpy as np
 from sklearn.cluster import KMeans
-def is_cuda_available():
-    return False
+from sklearn.mixture import GaussianMixture
 
-def prepare_features(data, include_coords=False, coord_weight=1.0, mask=None):
+def _apply_normalization(stack, normalize_stack=False, normalize=False):
     """
-    Reshape image data into a feature vector for each pixel.
-    :param data: numpy array of shape (H, W) or (H, W, C)
-    :param include_coords: Whether to include (x, y) coordinates as features.
-    :param coord_weight: Scaling factor for coordinates.
-    :param mask: Optional mask of shape (H, W) or (H, W, 1). If provided, only pixels where mask > 0 are included.
-    :return: (features, h, w, mask_indices)
-    """
-    h, w = data.shape[:2]
-    if data.dtype != np.float32 and data.dtype != np.float64:
-        data_float = data.astype(np.float32)
-    else:
-        data_float = data
-
-    if data_float.ndim == 2:
-        features = data_float.reshape(-1, 1)
-    else:
-        features = data_float.reshape(-1, data_float.shape[2])
-
-    if include_coords:
-        y, x = np.mgrid[0:h, 0:w]
-        # Normalize coordinates to [0, 1] and apply weight
-        x = (x.astype(np.float32) / max(1, w - 1)) * coord_weight
-        y = (y.astype(np.float32) / max(1, h - 1)) * coord_weight
-        coords = np.stack([x.ravel(), y.ravel()], axis=-1)
-        features = np.hstack([features, coords])
-
-    mask_indices = None
-    if mask is not None:
-        if mask.ndim == 3:
-            mask = mask[:, :, 0]
-        mask_flat = mask.ravel()
-        mask_indices = np.where(mask_flat > 0)[0]
-        features = features[mask_indices]
-
-    return features, h, w, mask_indices
-
-def apply_kmeans(data, n_clusters=3, max_iter=300, tol=1e-4, init='k-means++', random_state=None, include_coords=False, coord_weight=1.0, mask=None):
-    """
-    Apply K-Means clustering to the image data.
-    """
-    features, h, w, mask_indices = prepare_features(data, include_coords, coord_weight, mask)
+    Apply normalization to the image stack.
     
-    if len(features) == 0:
-        return np.full((h, w), -9999, dtype=np.int32)
-
-    kmeans = KMeans(n_clusters=n_clusters, max_iter=max_iter, tol=tol, init=init, random_state=random_state, n_init='auto')
-    labels = kmeans.fit_predict(features)
-    
-    if mask_indices is not None:
-        full_labels = np.full(h * w, -9999, dtype=np.int32)
-        full_labels[mask_indices] = labels
-        return full_labels.reshape(h, w)
-    
-    return labels.reshape(h, w)
-
-def apply_isodata(data, initial_clusters=3, max_iter=100, min_samples=20, max_stddev=10, min_dist=20, max_merge_pairs=2, random_state=None, include_coords=False, coord_weight=1.0, mask=None):
+    Args:
+        stack (np.ndarray): Image stack (N, H, W).
+        normalize_stack (bool): Normalize entire stack.
+        normalize (bool): Normalize per image.
+        
+    Returns:
+        np.ndarray: Normalized stack.
     """
-    Apply ISODATA clustering to the image data.
-    """
-    features, h, w, mask_indices = prepare_features(data, include_coords, coord_weight, mask)
+    if not normalize_stack and not normalize:
+        return stack
+    
+    stack = stack.copy()
+    n_images = stack.shape[0]
 
-    if len(features) == 0:
-        return np.full((h, w), -9999, dtype=np.int32)
-
-    rng = np.random.RandomState(random_state)
-
-    # 1. Initialize means
-    n_samples, n_features = features.shape
-    indices = rng.choice(n_samples, initial_clusters, replace=False)
-    means = features[indices]
-
-    for iteration in range(max_iter):
-        # 2. Assign samples to the nearest mean
-        distances = np.linalg.norm(features[:, np.newaxis] - means, axis=2)
-        labels = np.argmin(distances, axis=1)
-
-        # 3. Discard clusters with fewer than min_samples samples
-        unique_labels, counts = np.unique(labels, return_counts=True)
-        valid_mask = counts >= min_samples
-        if not np.all(valid_mask):
-            valid_labels = unique_labels[valid_mask]
-            if len(valid_labels) == 0:
-                break
-            means = means[valid_labels]
-            # Re-assign
-            distances = np.linalg.norm(features[:, np.newaxis] - means, axis=2)
-            labels = np.argmin(distances, axis=1)
-            unique_labels, counts = np.unique(labels, return_counts=True)
-
-        # 4. Update cluster means
-        new_means = np.zeros((len(unique_labels), n_features))
-        for i, label in enumerate(unique_labels):
-            new_means[i] = np.mean(features[labels == label], axis=0)
-        means = new_means
-
-        num_clusters = len(means)
-        
-        # Determine if we should split or merge
-        # Standard ISODATA rules:
-        # If num_clusters <= initial_clusters / 2, split
-        # If num_clusters >= initial_clusters * 2, merge
-        # Otherwise, alternate split/merge on odd/even iterations
-        
-        do_split = False
-        do_merge = False
-        
-        if num_clusters <= initial_clusters // 2:
-            do_split = True
-        elif iteration % 2 == 0 or num_clusters >= initial_clusters * 2:
-            do_merge = True
+    # Apply normalization to the entire stack if requested
+    if normalize_stack:
+        s_min, s_max = stack.min(), stack.max()
+        if s_max > s_min:
+            stack = (stack - s_min) / (s_max - s_min)
         else:
-            do_split = True
+            stack = np.zeros_like(stack)
 
-        if do_split:
-            # 5. Splitting
-            new_means = []
-            for i in range(num_clusters):
-                cluster_features = features[labels == i]
-                if len(cluster_features) > 2 * (min_samples + 1):
-                    std_devs = np.std(cluster_features, axis=0)
-                    max_std_idx = np.argmax(std_devs)
-                    max_std = std_devs[max_std_idx]
-                    
-                    if max_std > max_stddev:
-                        # Split cluster
-                        mean = means[i]
-                        v = 0.5 * max_std # Splitting factor
-                        m1 = mean.copy()
-                        m2 = mean.copy()
-                        m1[max_std_idx] += v
-                        m2[max_std_idx] -= v
-                        new_means.append(m1)
-                        new_means.append(m2)
-                    else:
-                        new_means.append(means[i])
-                else:
-                    new_means.append(means[i])
-            means = np.array(new_means)
+    # Apply normalization per image if requested
+    if normalize:
+        for i in range(n_images):
+            img = stack[i]
+            d_min, d_max = img.min(), img.max()
+            if d_max > d_min:
+                stack[i] = (img - d_min) / (d_max - d_min)
+            else:
+                stack[i] = np.zeros_like(img)
+    return stack
+
+def kmeans_clustering(stack, n_clusters=8, max_iter=300, init='k-means++', n_init=10, random_state=None, algorithm='auto', normalize=False, tol=1e-4, normalize_stack=False):
+    """
+    Perform k-means clustering on an image stack.
+    
+    Args:
+        stack (np.ndarray): Image stack of shape (N, H, W) float32.
+        n_clusters (int): Number of clusters.
+        max_iter (int): Maximum number of iterations.
+        init (str or np.ndarray): Initialization method.
+        n_init (int): Number of times k-means will be run with different seeds.
+        random_state (int or None): Random seed.
+        algorithm (str): K-means algorithm to use ('lloyd', 'elkan', 'auto', 'full').
+        normalize (bool): Whether to normalize each image in the stack individually.
+        tol (float): Relative tolerance with regards to Frobenius norm of the difference in the cluster centers.
+        normalize_stack (bool): Whether to normalize the entire stack as a single block.
         
-        elif do_merge and num_clusters > 1:
-            # 6. Merging
-            # Calculate distances between all pairs of cluster centers
-            pair_distances = []
-            for i in range(num_clusters):
-                for j in range(i + 1, num_clusters):
-                    dist = np.linalg.norm(means[i] - means[j])
-                    if dist < min_dist:
-                        pair_distances.append((i, j, dist))
-            
-            if pair_distances:
-                pair_distances.sort(key=lambda x: x[2])
-                merged_indices = set()
-                new_means = []
-                num_merges = 0
-                
-                # Merge up to max_merge_pairs
-                for i, j, dist in pair_distances:
-                    if num_merges >= max_merge_pairs:
-                        break
-                    if i not in merged_indices and j not in merged_indices:
-                        # Merge clusters i and j
-                        n_i = counts[i]
-                        n_j = counts[j]
-                        new_mean = (n_i * means[i] + n_j * means[j]) / (n_i + n_j)
-                        new_means.append(new_mean)
-                        merged_indices.add(i)
-                        merged_indices.add(j)
-                        num_merges += 1
-                
-                # Add remaining clusters
-                for i in range(num_clusters):
-                    if i not in merged_indices:
-                        new_means.append(means[i])
-                means = np.array(new_means)
+    Returns:
+        np.ndarray: Cluster labels as an image of shape (H, W).
+    """
+    if stack is None or len(stack.shape) != 3:
+        raise ValueError("Stack must be (N, H, W) numpy array.")
+    
+    n_images, height, width = stack.shape
 
-    # Final assignment
-    distances = np.linalg.norm(features[:, np.newaxis] - means, axis=2)
-    labels = np.argmin(distances, axis=1)
+    stack = _apply_normalization(stack, normalize_stack, normalize)
+    
+    # Reshape stack to (H*W, N) so each pixel is a sample with N features
+    # stack is (N, H, W), we want (H, W, N) then (H*W, N)
+    data = stack.transpose(1, 2, 0).reshape(-1, n_images)
+    
+    # K-means implementation from scikit-learn
+    # Note: 'auto' and 'full' are deprecated or removed in newer versions of sklearn.
+    if algorithm in ['auto', 'full']:
+        algorithm = 'lloyd'
+    
+    kmeans = KMeans(
+        n_clusters=n_clusters,
+        max_iter=max_iter,
+        init=init,
+        n_init=n_init,
+        random_state=random_state,
+        algorithm=algorithm,
+        tol=tol
+    )
+    
+    labels = kmeans.fit_predict(data)
+    
+    # Reshape labels back to (H, W)
+    cluster_mask = labels.reshape(height, width)
+    
+    return cluster_mask
 
-    if mask_indices is not None:
-        full_labels = np.full(h * w, -9999, dtype=np.int32)
-        full_labels[mask_indices] = labels
-        return full_labels.reshape(h, w)
+def gaussian_mixture_clustering(stack, n_components=8, covariance_type='full', tol=1e-3, max_iter=100, random_state=None, normalize=False, normalize_stack=False):
+    """
+    Perform Gaussian Mixture Model clustering on an image stack.
+    
+    Args:
+        stack (np.ndarray): Image stack of shape (N, H, W) float32.
+        n_components (int): Number of mixture components.
+        covariance_type (str): Type of covariance parameters to use ('full', 'tied', 'diag', 'spherical').
+        tol (float): The convergence threshold.
+        max_iter (int): Maximum number of EM iterations to perform.
+        random_state (int or None): Random seed.
+        normalize (bool): Whether to normalize each image in the stack individually.
+        normalize_stack (bool): Whether to normalize the entire stack as a single block.
+        
+    Returns:
+        np.ndarray: Cluster labels as an image of shape (H, W).
+    """
+    if stack is None or len(stack.shape) != 3:
+        raise ValueError("Stack must be (N, H, W) numpy array.")
+    
+    n_images, height, width = stack.shape
 
-    return labels.reshape(h, w)
+    stack = _apply_normalization(stack, normalize_stack, normalize)
+    
+    # Reshape stack to (H*W, N)
+    data = stack.transpose(1, 2, 0).reshape(-1, n_images)
+    
+    gmm = GaussianMixture(
+        n_components=n_components,
+        covariance_type=covariance_type,
+        tol=tol,
+        max_iter=max_iter,
+        random_state=random_state
+    )
+    
+    labels = gmm.fit_predict(data)
+    
+    # Reshape labels back to (H, W)
+    cluster_mask = labels.reshape(height, width)
+    
+    return cluster_mask
 
-
-
+def get_individual_masks(cluster_mask, n_clusters):
+    """
+    Split the cluster mask into individual binary masks for each cluster.
+    
+    Args:
+        cluster_mask (np.ndarray): Mask of shape (H, W) with cluster labels.
+        n_clusters (int): Total number of clusters.
+        
+    Returns:
+        list of np.ndarray: List of binary masks.
+    """
+    masks = []
+    for i in range(n_clusters):
+        binary_mask = (cluster_mask == i).astype(np.uint8)
+        masks.append(binary_mask)
+    return masks

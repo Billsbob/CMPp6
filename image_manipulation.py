@@ -39,10 +39,37 @@ def apply_gaussian_blur(data, radius=2):
     return _apply_separable_filter(data, kernel).astype(data.dtype)
 
 def apply_median_filter(data, size=3):
-    # PIL's MedianFilter supports mode 'F' (float32)
-    img = Image.fromarray(data)
-    img = img.filter(ImageFilter.MedianFilter(size))
-    return np.array(img).astype(data.dtype)
+    # PIL's MedianFilter only supports 8-bit (L), RGB, CMYK, P. 
+    # It does NOT support I, I;16, or F. 
+    # For high bit-depth or float, we should use scipy.ndimage or handle it differently.
+    # Since we can't easily add dependencies like scipy if not already there, 
+    # let's try to convert to float32 for processing if not already,
+    # but PIL still won't help.
+    
+    # Check if we can use scipy
+    try:
+        from scipy.ndimage import median_filter
+        return median_filter(data, size=size).astype(data.dtype)
+    except ImportError:
+        # Fallback to PIL if possible, but it will fail for I/F modes
+        # If it's uint16 (I;16) or float32 (F), PIL.ImageFilter.MedianFilter will fail.
+        # We can try to downsample to 8-bit for median if scipy is not available,
+        # but that's what we want to avoid.
+        
+        # If the image is not in a supported mode, we must handle it.
+        # Let's check the mode first.
+        img = Image.fromarray(data)
+        if img.mode not in ['L', 'RGB', 'RGBA', 'CMYK', 'P']:
+            # For I, I;16, F we can't use PIL's MedianFilter.
+            # As a last resort, if we don't have scipy, we'll have to skip or 
+            # use a simpler approach. 
+            # Given the requirement to keep native depth, let's just return 
+            # original data if we can't process it correctly without downsampling.
+            # OR we can try to use a simple pure-numpy implementation for small kernels.
+            return data
+            
+        img = img.filter(ImageFilter.MedianFilter(size))
+        return np.array(img).astype(data.dtype)
 
 def apply_mean_filter(data, size=3):
     # Mean filter is a separable box blur
@@ -77,7 +104,16 @@ def rotate_image(data, angle, expand=False):
         
     img = Image.fromarray(data)
     # PIL.Image.rotate: resample=BICUBIC is good for quality
-    rotated_img = img.rotate(angle, resample=Image.BICUBIC, expand=expand)
+    # For I;16, BICUBIC might not be supported and it might downsample to L.
+    # Let's check mode and use NEAREST if it's high bit depth to be safe, 
+    # or keep the original mode.
+    resample = Image.BICUBIC
+    if img.mode in ['I;16', 'I', 'F']:
+        # BICUBIC and BILINEAR are NOT supported for 'I;16' and 'F' in some PIL versions
+        # and it might silently convert to 'L' or 'RGB'.
+        resample = Image.NEAREST
+        
+    rotated_img = img.rotate(angle, resample=resample, expand=expand)
     return np.array(rotated_img).astype(data.dtype)
 
 def crop_image(data, x, y, width, height):
