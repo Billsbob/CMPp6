@@ -35,6 +35,10 @@ args = [
     '--hidden-import', 'umap',
     '--hidden-import', 'igraph',
     '--hidden-import', 'leidenalg',
+    '--hidden-import', 'sklearn.utils._cython_blas',
+    '--hidden-import', 'sklearn.neighbors._typedefs',
+    '--hidden-import', 'scipy.special.cython_special',
+    '--hidden-import', 'scipy.stats._stats',
 ]
 
 # Add data files to arguments
@@ -48,6 +52,9 @@ for source, dest in added_data:
 
 # Run PyInstaller
 if __name__ == '__main__':
+    # Add scikit-learn and other hooks if needed
+    # (PyInstaller usually handles these, but some environments need help)
+    
     # Ensure dist and build folders exist
     if not os.path.exists('dist'):
         os.makedirs('dist')
@@ -73,12 +80,16 @@ a = Analysis(
         'sklearn.neighbors._partition_nodes',
         'sklearn.neighbors._quad_tree',
         'sklearn.tree._utils',
+        'sklearn.utils._cython_blas',
+        'sklearn.neighbors._typedefs',
         'pynndescent',
         'umap',
         'igraph',
         'leidenalg',
         'scanpy',
-        'anndata'
+        'anndata',
+        'scipy.special.cython_special',
+        'scipy.stats._stats'
     ],
     hookspath=[],
     hooksconfig={{}},
