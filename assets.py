@@ -36,9 +36,9 @@ class TransformPipeline:
 
         for t in transforms:
             if t["type"] == "crop":
-                processed = image_manipulation.crop_image(processed, *t["params"])
+                processed = image_manipulation.crop_image(processed, *t["params"], crop_border=5)
             elif t["type"] == "rotate":
-                processed = image_manipulation.rotate_image(processed, t["angle"], expand=True)
+                processed = image_manipulation.rotate_image(processed, t["angle"], expand=True, crop_border=5)
 
         filters = self.config.get("filters", [])
         params = self.config.get("filter_params", {})

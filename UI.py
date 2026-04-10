@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox
 )
 from PySide6.QtGui import QAction, QPixmap, QPainter, QWheelEvent, QPalette, QPen, QColor, QBrush, QImage
-from PySide6.QtCore import Qt, QSize, QPoint, QPointF, QRectF, Signal
+from PySide6.QtCore import Qt, QSize, QPoint, QPointF, QRectF, Signal, QObject, QThread
 import os
 import numpy as np
 from PIL import Image
@@ -17,6 +17,39 @@ from image_handler import ImageDisplayHandler
 import image_stacker
 import clustering
 import graphing
+
+class ClusteringWorker(QObject):
+    finished = Signal(object, str, int)  # result_mask, mask_root_name, n_clusters
+    error = Signal(str)
+
+    def __init__(self, algorithm, stack, mask, params, mask_root_name):
+        super().__init__()
+        self.algorithm = algorithm
+        self.stack = stack.astype(np.float32) if stack is not None else None
+        self.mask = mask
+        self.params = params
+        self.mask_root_name = mask_root_name
+
+    def run(self):
+        try:
+            if self.algorithm == "kmeans":
+                result_mask = clustering.kmeans_clustering(self.stack, mask=self.mask, **self.params)
+                n_clusters = self.params["n_clusters"]
+            elif self.algorithm == "gmm":
+                result_mask = clustering.gaussian_mixture_clustering(self.stack, mask=self.mask, **self.params)
+                n_clusters = self.params["n_components"]
+            elif self.algorithm == "isodata":
+                result_mask = clustering.isodata_clustering(self.stack, mask=self.mask, **self.params)
+                # For ISODATA, the number of clusters can change. 
+                # We need to find the unique labels in result_mask (excluding -1)
+                unique_labels = np.unique(result_mask)
+                n_clusters = len(unique_labels[unique_labels != -1])
+            else:
+                raise ValueError(f"Unknown algorithm: {self.algorithm}")
+            
+            self.finished.emit(result_mask, self.mask_root_name, n_clusters)
+        except Exception as e:
+            self.error.emit(str(e))
 
 class ZoomableView(QGraphicsView):
     def __init__(self, parent=None):
@@ -200,7 +233,8 @@ class ClusterParameterDialog(QDialog):
             "algorithm": "auto",
             "normalize": False,
             "normalize_stack": False,
-            "tol": 1e-4
+            "tol": 1e-4,
+            "cluster_under_mask": False
         }
         self.setup_ui()
 
@@ -254,6 +288,10 @@ class ClusterParameterDialog(QDialog):
         self.tol_spin.setValue(self.params["tol"])
         form_layout.addRow("Tolerance:", self.tol_spin)
 
+        self.cluster_under_mask_check = QCheckBox()
+        self.cluster_under_mask_check.setChecked(self.params["cluster_under_mask"])
+        form_layout.addRow("Cluster under selected mask:", self.cluster_under_mask_check)
+
         layout.addLayout(form_layout)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -270,7 +308,99 @@ class ClusterParameterDialog(QDialog):
             "algorithm": self.algorithm_combo.currentText(),
             "normalize": self.normalize_check.isChecked(),
             "normalize_stack": self.normalize_stack_check.isChecked(),
-            "tol": self.tol_spin.value()
+            "tol": self.tol_spin.value(),
+            "cluster_under_mask": self.cluster_under_mask_check.isChecked()
+        }
+
+class ISODATAParameterDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.params = {
+            "n_clusters": 8,
+            "max_iter": 100,
+            "min_samples": 20,
+            "max_std_dev": 0.1,
+            "min_cluster_distance": 0.1,
+            "max_merge_pairs": 2,
+            "random_state": 0,
+            "normalize": False,
+            "normalize_stack": False,
+            "cluster_under_mask": False
+        }
+        self.setup_ui()
+
+    def setup_ui(self):
+        self.setWindowTitle("ISODATA Parameters")
+        layout = QVBoxLayout(self)
+        form_layout = QFormLayout()
+
+        self.n_clusters_spin = QSpinBox()
+        self.n_clusters_spin.setRange(2, 100)
+        self.n_clusters_spin.setValue(self.params["n_clusters"])
+        form_layout.addRow("Initial Clusters:", self.n_clusters_spin)
+
+        self.max_iter_spin = QSpinBox()
+        self.max_iter_spin.setRange(1, 1000)
+        self.max_iter_spin.setValue(self.params["max_iter"])
+        form_layout.addRow("Max Iterations:", self.max_iter_spin)
+
+        self.min_samples_spin = QSpinBox()
+        self.min_samples_spin.setRange(1, 10000)
+        self.min_samples_spin.setValue(self.params["min_samples"])
+        form_layout.addRow("Min Samples per Cluster:", self.min_samples_spin)
+
+        self.max_std_dev_spin = QDoubleSpinBox()
+        self.max_std_dev_spin.setRange(0.0001, 10.0)
+        self.max_std_dev_spin.setDecimals(4)
+        self.max_std_dev_spin.setValue(self.params["max_std_dev"])
+        form_layout.addRow("Max Std Dev (Split):", self.max_std_dev_spin)
+
+        self.min_cluster_distance_spin = QDoubleSpinBox()
+        self.min_cluster_distance_spin.setRange(0.0001, 10.0)
+        self.min_cluster_distance_spin.setDecimals(4)
+        self.min_cluster_distance_spin.setValue(self.params["min_cluster_distance"])
+        form_layout.addRow("Min Cluster Dist (Merge):", self.min_cluster_distance_spin)
+
+        self.max_merge_pairs_spin = QSpinBox()
+        self.max_merge_pairs_spin.setRange(1, 100)
+        self.max_merge_pairs_spin.setValue(self.params["max_merge_pairs"])
+        form_layout.addRow("Max Merge Pairs:", self.max_merge_pairs_spin)
+
+        self.random_state_spin = QSpinBox()
+        self.random_state_spin.setRange(0, 1000000)
+        self.random_state_spin.setValue(self.params["random_state"])
+        form_layout.addRow("Random State:", self.random_state_spin)
+
+        self.normalize_check = QCheckBox()
+        self.normalize_check.setChecked(self.params["normalize"])
+        form_layout.addRow("Normalize (per image):", self.normalize_check)
+
+        self.normalize_stack_check = QCheckBox()
+        self.normalize_stack_check.setChecked(self.params["normalize_stack"])
+        form_layout.addRow("Normalize (entire stack):", self.normalize_stack_check)
+
+        self.cluster_under_mask_check = QCheckBox()
+        self.cluster_under_mask_check.setChecked(self.params["cluster_under_mask"])
+        form_layout.addRow("Cluster under selected mask:", self.cluster_under_mask_check)
+
+        layout.addLayout(form_layout)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_params(self):
+        return {
+            "n_clusters": self.n_clusters_spin.value(),
+            "max_iter": self.max_iter_spin.value(),
+            "min_samples": self.min_samples_spin.value(),
+            "max_std_dev": self.max_std_dev_spin.value(),
+            "min_cluster_distance": self.min_cluster_distance_spin.value(),
+            "max_merge_pairs": self.max_merge_pairs_spin.value(),
+            "random_state": self.random_state_spin.value(),
+            "normalize": self.normalize_check.isChecked(),
+            "normalize_stack": self.normalize_stack_check.isChecked(),
+            "cluster_under_mask": self.cluster_under_mask_check.isChecked()
         }
 
 class GMMParameterDialog(QDialog):
@@ -283,7 +413,8 @@ class GMMParameterDialog(QDialog):
             "max_iter": 100,
             "random_state": 0,
             "normalize": False,
-            "normalize_stack": False
+            "normalize_stack": False,
+            "cluster_under_mask": False
         }
         self.setup_ui()
 
@@ -327,6 +458,10 @@ class GMMParameterDialog(QDialog):
         self.normalize_stack_check.setChecked(self.params["normalize_stack"])
         form_layout.addRow("Normalize (entire stack):", self.normalize_stack_check)
 
+        self.cluster_under_mask_check = QCheckBox()
+        self.cluster_under_mask_check.setChecked(self.params["cluster_under_mask"])
+        form_layout.addRow("Cluster under selected mask:", self.cluster_under_mask_check)
+
         layout.addLayout(form_layout)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -341,7 +476,8 @@ class GMMParameterDialog(QDialog):
             "max_iter": self.max_iter_spin.value(),
             "random_state": self.random_state_spin.value(),
             "normalize": self.normalize_check.isChecked(),
-            "normalize_stack": self.normalize_stack_check.isChecked()
+            "normalize_stack": self.normalize_stack_check.isChecked(),
+            "cluster_under_mask": self.cluster_under_mask_check.isChecked()
         }
 
 class ThresholdParameterDialog(QDialog):
@@ -382,6 +518,94 @@ class ThresholdParameterDialog(QDialog):
             "threshold": self.threshold_spin.value(),
             "normalize": self.normalize_check.isChecked()
         }
+
+class ImageAdjustmentsDialog(QDialog):
+    def __init__(self, assets, parent=None):
+        super().__init__(parent)
+        self.assets = assets
+        self.setWindowTitle("Image Adjustments")
+        self.setMinimumSize(400, 300)
+        self.setup_ui()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        self.adj_list = QListWidget()
+        self.adj_list.itemClicked.connect(self.on_item_clicked)
+        layout.addWidget(QLabel("Applied Adjustments (Click to undo):"))
+        layout.addWidget(self.adj_list)
+        
+        self.refresh_list()
+        
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+    def refresh_list(self):
+        self.adj_list.clear()
+        if not self.assets:
+            return
+        
+        # We'll list common adjustments among all selected assets.
+        # However, for simplicity and to follow the requirement "list of all the adjustments that have been applied to the selected images",
+        # if multiple images are selected, we can list adjustments from all of them, identifying which image they belong to.
+        # BUT, if they are the same adjustment across images, we can group them.
+        
+        # Let's collect all unique adjustments.
+        all_adjustments = []
+        
+        for asset in self.assets:
+            config = asset.pipeline.config
+            
+            # Filters
+            for f in config.get("filters", []):
+                all_adjustments.append({
+                    "type": "Filter",
+                    "name": f,
+                    "asset_name": asset.name,
+                    "label": f"Filter: {f.capitalize()} (on {asset.name})",
+                    "data": f
+                })
+            
+            # Invert
+            if config.get("invert", False):
+                all_adjustments.append({
+                    "type": "Invert",
+                    "name": "invert",
+                    "asset_name": asset.name,
+                    "label": f"Invert (on {asset.name})",
+                    "data": None
+                })
+            
+            # Transforms (Crop, Rotate)
+            for i, t in enumerate(config.get("transforms", [])):
+                t_type = t["type"]
+                label = f"{t_type.capitalize()} (on {asset.name})"
+                if t_type == "rotate":
+                    label = f"Rotate: {t['angle']}° (on {asset.name})"
+                elif t_type == "crop":
+                    label = f"Crop: {t['params']} (on {asset.name})"
+                
+                all_adjustments.append({
+                    "type": "Transform",
+                    "name": t_type,
+                    "asset_name": asset.name,
+                    "label": label,
+                    "index": i,
+                    "data": t
+                })
+        
+        for adj in all_adjustments:
+            item = QListWidgetItem(adj["label"])
+            item.setData(Qt.UserRole, adj)
+            self.adj_list.addItem(item)
+
+    def on_item_clicked(self, item):
+        adj = item.data(Qt.UserRole)
+        msg = f"Are you sure you want to undo '{adj['label']}'?"
+        if QMessageBox.question(self, "Undo Adjustment", msg) == QMessageBox.Yes:
+            self.parent()._undo_adjustment(adj)
+            self.refresh_list()
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -465,10 +689,18 @@ class MainWindow(QMainWindow):
         self.delete_masks_btn = QPushButton("Delete")
         self.delete_masks_btn.setFixedWidth(60)
         self.delete_masks_btn.clicked.connect(self._delete_selected_masks)
+        self.merge_masks_btn = QPushButton("Merge")
+        self.merge_masks_btn.setFixedWidth(60)
+        self.merge_masks_btn.clicked.connect(self._merge_selected_masks)
+        self.save_masks_btn = QPushButton("Save")
+        self.save_masks_btn.setFixedWidth(60)
+        self.save_masks_btn.clicked.connect(self._save_visible_masks)
         
         mask_btn_layout.addWidget(self.select_all_masks_btn)
         mask_btn_layout.addWidget(self.select_none_masks_btn)
         mask_btn_layout.addWidget(self.delete_masks_btn)
+        mask_btn_layout.addWidget(self.merge_masks_btn)
+        mask_btn_layout.addWidget(self.save_masks_btn)
         mask_btn_layout.addStretch()
 
         self.mask_list = QListWidget()
@@ -500,11 +732,15 @@ class MainWindow(QMainWindow):
         self.save_graphs_btn = QPushButton("Save")
         self.save_graphs_btn.setFixedWidth(60)
         self.save_graphs_btn.clicked.connect(self._save_selected_graphs)
+        self.export_graphs_btn = QPushButton("Export")
+        self.export_graphs_btn.setFixedWidth(60)
+        self.export_graphs_btn.clicked.connect(self._export_selected_graphs)
         
         graph_btn_layout.addWidget(self.select_all_graphs_btn)
         graph_btn_layout.addWidget(self.select_none_graphs_btn)
         graph_btn_layout.addWidget(self.delete_graphs_btn)
         graph_btn_layout.addWidget(self.save_graphs_btn)
+        graph_btn_layout.addWidget(self.export_graphs_btn)
         graph_btn_layout.addStretch()
 
         self.graph_list = QListWidget()
@@ -571,6 +807,13 @@ class MainWindow(QMainWindow):
         menu_bar.addAction(home_action)
 
         tools_menu = menu_bar.addMenu("Tools")
+        
+        adj_action = QAction("Image Adjustments", self)
+        adj_action.triggered.connect(self._show_image_adjustments)
+        tools_menu.addAction(adj_action)
+        
+        tools_menu.addSeparator()
+
         invert_action = QAction("Invert", self)
         invert_action.triggered.connect(self._invert_selected_images)
         tools_menu.addAction(invert_action)
@@ -610,6 +853,10 @@ class MainWindow(QMainWindow):
         gmm_action = QAction("Gaussian Mixture", self)
         gmm_action.triggered.connect(self._run_gmm)
         cluster_menu.addAction(gmm_action)
+
+        isodata_action = QAction("ISODATA", self)
+        isodata_action.triggered.connect(self._run_isodata)
+        cluster_menu.addAction(isodata_action)
 
         analyze_menu = menu_bar.addMenu("Analyze")
         create_hist_action = QAction("Create Histograms", self)
@@ -651,7 +898,7 @@ class MainWindow(QMainWindow):
             return
         mask_dir = os.path.join(self.working_dir, "Cluster Masks")
         if os.path.exists(mask_dir):
-            masks = [f for f in os.listdir(mask_dir) if (f.startswith("KC_") or f.startswith("GMM_") or f.startswith("ThresholdMask_")) and f.endswith(".npy")]
+            masks = [f for f in os.listdir(mask_dir) if f.lower().endswith(".npy")]
             # Sort masks
             try:
                 masks.sort()
@@ -825,6 +1072,7 @@ class MainWindow(QMainWindow):
             # Just copy the file
             import shutil
             shutil.copy(os.path.join(graph_dir, selected[0].text()), path)
+            QMessageBox.information(self, "Save", f"Graph saved to {path}")
         else:
             # Create and save combined
             items_measurements = []
@@ -845,6 +1093,63 @@ class MainWindow(QMainWindow):
             if items_measurements:
                 graphing.create_dynamic_overlaid_histogram(items_measurements, output_path=path)
                 QMessageBox.information(self, "Save", f"Combined histogram saved to {path}")
+
+    def _export_selected_graphs(self):
+        if not self.working_dir: return
+        selected = self.graph_list.selectedItems()
+        if not selected:
+            QMessageBox.warning(self, "Export", "No graphs selected.")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(self, "Export Raw Values", "", "CSV (*.csv)")
+        if not path: return
+
+        graph_dir = os.path.join(self.working_dir, "Graphs")
+        items_measurements = []
+        for item in selected:
+            name = item.text()
+            for f in os.listdir(graph_dir):
+                if f.startswith("Measurements_") and f.endswith(".json"):
+                    mask_part = f[len("Measurements_"):-len(".json")]
+                    if mask_part in name:
+                        try:
+                            with open(os.path.join(graph_dir, f), 'r') as jf:
+                                measurements = json.load(jf)
+                                for img_name, values in measurements.items():
+                                    safe_img = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in img_name])
+                                    if safe_img in name:
+                                        items_measurements.append((img_name, values))
+                                        break
+                        except Exception as e:
+                            print(f"Error reading {f}: {e}")
+
+        if not items_measurements:
+            QMessageBox.warning(self, "Export", "Could not find raw data for selected graphs.")
+            return
+
+        try:
+            import csv
+            # We want to export raw values. Since lengths might differ, we'll write them in columns.
+            # Find the maximum length to pad
+            max_len = max(len(values) for _, values in items_measurements)
+            
+            with open(path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                # Header
+                writer.writerow([label for label, _ in items_measurements])
+                # Data rows
+                for i in range(max_len):
+                    row = []
+                    for _, values in items_measurements:
+                        if i < len(values):
+                            row.append(values[i])
+                        else:
+                            row.append("")
+                    writer.writerow(row)
+            
+            QMessageBox.information(self, "Export", f"Raw values exported to {path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"An error occurred: {str(e)}")
 
     def _graph_clicked(self, item):
         self._show_graphs_window()
@@ -871,7 +1176,42 @@ class MainWindow(QMainWindow):
             self._update_graph_list()
             self._show_graphs_window()
 
+    def _on_clustering_finished(self, cluster_mask, mask_root_name, n_clusters):
+        try:
+            mask_dir = os.path.join(self.working_dir, "Cluster Masks")
+            os.makedirs(mask_dir, exist_ok=True)
+
+            individual_masks = clustering.get_individual_masks(cluster_mask, n_clusters)
+
+            for i, mask in enumerate(individual_masks):
+                if mask_root_name != "KC" and mask_root_name != "GMM":
+                    new_mask_name = f"{mask_root_name}_{i+1:02d}.npy"
+                else:
+                    new_mask_name = f"{mask_root_name}_{i+1}.npy"
+                np.save(os.path.join(mask_dir, new_mask_name), mask)
+
+            self.statusBar().showMessage("Clustering completed.", 3000)
+            self._update_mask_list()
+        except Exception as e:
+            QMessageBox.critical(self, "Clustering Error", f"An error occurred while saving results: {str(e)}")
+        finally:
+            QApplication.restoreOverrideCursor()
+            if hasattr(self, 'clustering_thread'):
+                self.clustering_thread.quit()
+                self.clustering_thread.wait()
+
+    def _on_clustering_error(self, error_msg):
+        QApplication.restoreOverrideCursor()
+        QMessageBox.critical(self, "Clustering Error", f"An error occurred during clustering: {error_msg}")
+        if hasattr(self, 'clustering_thread'):
+            self.clustering_thread.quit()
+            self.clustering_thread.wait()
+
     def _run_kmeans(self):
+        if hasattr(self, 'clustering_thread') and self.clustering_thread.isRunning():
+            QMessageBox.warning(self, "K-Means", "A clustering process is already running. Please wait for it to finish.")
+            return
+
         if not self.working_dir:
             QMessageBox.warning(self, "K-Means", "Please select a working directory first.")
             return
@@ -897,27 +1237,54 @@ class MainWindow(QMainWindow):
         dialog = ClusterParameterDialog(self)
         if dialog.exec() == QDialog.Accepted:
             params = dialog.get_params()
+            cluster_under_mask = params.pop("cluster_under_mask", False)
+            mask_to_use = None
+            mask_root_name = "KC"
+            
+            if cluster_under_mask:
+                selected_masks = self.mask_list.selectedItems()
+                if len(selected_masks) != 1:
+                    QMessageBox.warning(self, "K-Means", "Please select exactly one mask to cluster under.")
+                    return
+                mask_name = selected_masks[0].text()
+                mask_root_name = os.path.splitext(mask_name)[0]
+                mask_path = os.path.join(self.working_dir, "Cluster Masks", mask_name)
+                
+                if os.path.exists(mask_path):
+                    try:
+                        mask_to_use = np.load(mask_path)
+                    except Exception as e:
+                        QMessageBox.critical(self, "K-Means", f"Failed to load mask {mask_name}: {str(e)}")
+                        return
+                else:
+                    # Fallback to asset manager for other formats if any
+                    mask_asset = self.asset_manager.get_image_by_name(mask_name)
+                    if mask_asset:
+                        mask_asset.load_project()
+                        mask_to_use = mask_asset.get_rendered_data(data_only=True)
+
             try:
                 self.statusBar().showMessage("Running K-Means...")
                 QApplication.setOverrideCursor(Qt.WaitCursor)
-                cluster_mask = clustering.kmeans_clustering(stack, **params)
-                individual_masks = clustering.get_individual_masks(cluster_mask, params["n_clusters"])
-
-                mask_dir = os.path.join(self.working_dir, "Cluster Masks")
-                os.makedirs(mask_dir, exist_ok=True)
-
-                for i, mask in enumerate(individual_masks):
-                    mask_name = f"KC_{i+1}.npy"
-                    np.save(os.path.join(mask_dir, mask_name), mask)
-
-                self.statusBar().showMessage("K-Means completed.", 3000)
-                self._update_mask_list()
+                
+                self.clustering_thread = QThread()
+                self.clustering_worker = ClusteringWorker("kmeans", stack, mask_to_use, params, mask_root_name)
+                self.clustering_worker.moveToThread(self.clustering_thread)
+                
+                self.clustering_thread.started.connect(self.clustering_worker.run)
+                self.clustering_worker.finished.connect(self._on_clustering_finished)
+                self.clustering_worker.error.connect(self._on_clustering_error)
+                
+                self.clustering_thread.start()
             except Exception as e:
-                QMessageBox.critical(self, "K-Means Error", f"An error occurred during clustering: {str(e)}")
-            finally:
+                QMessageBox.critical(self, "K-Means Error", f"An error occurred while starting clustering: {str(e)}")
                 QApplication.restoreOverrideCursor()
 
     def _run_gmm(self):
+        if hasattr(self, 'clustering_thread') and self.clustering_thread.isRunning():
+            QMessageBox.warning(self, "Gaussian Mixture", "A clustering process is already running. Please wait for it to finish.")
+            return
+
         if not self.working_dir:
             QMessageBox.warning(self, "Gaussian Mixture", "Please select a working directory first.")
             return
@@ -943,24 +1310,118 @@ class MainWindow(QMainWindow):
         dialog = GMMParameterDialog(self)
         if dialog.exec() == QDialog.Accepted:
             params = dialog.get_params()
+            cluster_under_mask = params.pop("cluster_under_mask", False)
+            mask_to_use = None
+            mask_root_name = "GMM"
+
+            if cluster_under_mask:
+                selected_masks = self.mask_list.selectedItems()
+                if len(selected_masks) != 1:
+                    QMessageBox.warning(self, "Gaussian Mixture", "Please select exactly one mask to cluster under.")
+                    return
+                mask_name = selected_masks[0].text()
+                mask_root_name = os.path.splitext(mask_name)[0]
+                mask_path = os.path.join(self.working_dir, "Cluster Masks", mask_name)
+
+                if os.path.exists(mask_path):
+                    try:
+                        mask_to_use = np.load(mask_path)
+                    except Exception as e:
+                        QMessageBox.critical(self, "Gaussian Mixture", f"Failed to load mask {mask_name}: {str(e)}")
+                        return
+                else:
+                    mask_asset = self.asset_manager.get_image_by_name(mask_name)
+                    if mask_asset:
+                        mask_asset.load_project()
+                        mask_to_use = mask_asset.get_rendered_data(data_only=True)
+
             try:
                 self.statusBar().showMessage("Running Gaussian Mixture...")
                 QApplication.setOverrideCursor(Qt.WaitCursor)
-                cluster_mask = clustering.gaussian_mixture_clustering(stack, **params)
-                individual_masks = clustering.get_individual_masks(cluster_mask, params["n_components"])
 
-                mask_dir = os.path.join(self.working_dir, "Cluster Masks")
-                os.makedirs(mask_dir, exist_ok=True)
+                self.clustering_thread = QThread()
+                self.clustering_worker = ClusteringWorker("gmm", stack, mask_to_use, params, mask_root_name)
+                self.clustering_worker.moveToThread(self.clustering_thread)
 
-                for i, mask in enumerate(individual_masks):
-                    mask_name = f"GMM_{i+1}.npy"
-                    np.save(os.path.join(mask_dir, mask_name), mask)
+                self.clustering_thread.started.connect(self.clustering_worker.run)
+                self.clustering_worker.finished.connect(self._on_clustering_finished)
+                self.clustering_worker.error.connect(self._on_clustering_error)
 
-                self.statusBar().showMessage("Gaussian Mixture completed.", 3000)
-                self._update_mask_list()
+                self.clustering_thread.start()
             except Exception as e:
-                QMessageBox.critical(self, "GMM Error", f"An error occurred during clustering: {str(e)}")
-            finally:
+                QMessageBox.critical(self, "GMM Error", f"An error occurred while starting clustering: {str(e)}")
+                QApplication.restoreOverrideCursor()
+
+    def _run_isodata(self):
+        if hasattr(self, 'clustering_thread') and self.clustering_thread.isRunning():
+            QMessageBox.warning(self, "ISODATA", "A clustering process is already running. Please wait for it to finish.")
+            return
+
+        if not self.working_dir:
+            QMessageBox.warning(self, "ISODATA", "Please select a working directory first.")
+            return
+
+        selected_items = self.image_list.selectedItems()
+        if not selected_items:
+            image_names = list(self.image_handler.visible_assets)
+        else:
+            image_names = [item.text() for item in selected_items]
+
+        if not image_names:
+            QMessageBox.warning(self, "ISODATA", "No images selected or visible to cluster.")
+            return
+
+        stack = image_stacker.load_and_stack_images(self.asset_manager, image_names)
+        if stack is None:
+            QMessageBox.critical(self, "ISODATA", "Failed to create image stack.")
+            return
+
+        # Ensure stack is float32
+        stack = stack.astype(np.float32)
+
+        dialog = ISODATAParameterDialog(self)
+        if dialog.exec() == QDialog.Accepted:
+            params = dialog.get_params()
+            cluster_under_mask = params.pop("cluster_under_mask", False)
+            mask_to_use = None
+            mask_root_name = "ISODATA"
+
+            if cluster_under_mask:
+                selected_masks = self.mask_list.selectedItems()
+                if len(selected_masks) != 1:
+                    QMessageBox.warning(self, "ISODATA", "Please select exactly one mask to cluster under.")
+                    return
+                mask_name = selected_masks[0].text()
+                mask_root_name = os.path.splitext(mask_name)[0]
+                mask_path = os.path.join(self.working_dir, "Cluster Masks", mask_name)
+
+                if os.path.exists(mask_path):
+                    try:
+                        mask_to_use = np.load(mask_path)
+                    except Exception as e:
+                        QMessageBox.critical(self, "ISODATA", f"Failed to load mask {mask_name}: {str(e)}")
+                        return
+                else:
+                    mask_asset = self.asset_manager.get_image_by_name(mask_name)
+                    if mask_asset:
+                        mask_asset.load_project()
+                        mask_to_use = mask_asset.get_rendered_data(data_only=True)
+
+            try:
+                self.statusBar().showMessage("Running ISODATA...")
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+
+                self.clustering_thread = QThread()
+                self.clustering_worker = ClusteringWorker("isodata", stack, mask_to_use, params, mask_root_name)
+                self.clustering_worker.moveToThread(self.clustering_thread)
+
+                self.clustering_thread.started.connect(self.clustering_worker.run)
+                self.clustering_worker.finished.connect(self._on_clustering_finished)
+                self.clustering_worker.error.connect(self._on_clustering_error)
+
+                self.clustering_thread.start()
+            except Exception as e:
+                QMessageBox.critical(self, "ISODATA Error", f"An error occurred while starting clustering: {str(e)}")
                 QApplication.restoreOverrideCursor()
 
     def _create_threshold_mask(self):
@@ -1089,6 +1550,52 @@ class MainWindow(QMainWindow):
         menu.addAction(normalize_action)
 
         menu.exec(list_widget.mapToGlobal(position))
+
+    def _show_image_adjustments(self):
+        selected = self.image_list.selectedItems()
+        if not selected:
+            QMessageBox.information(self, "Image Adjustments", "Please select at least one image.")
+            return
+        
+        assets = []
+        for item in selected:
+            asset = self.asset_manager.get_image_by_name(item.text())
+            if asset:
+                assets.append(asset)
+        
+        dialog = ImageAdjustmentsDialog(assets, self)
+        dialog.exec()
+
+    def _undo_adjustment(self, adj):
+        asset = self.asset_manager.get_image_by_name(adj["asset_name"])
+        if not asset: return
+        
+        config = asset.pipeline.config
+        
+        if adj["type"] == "Filter":
+            filter_name = adj["data"]
+            if filter_name in config.get("filters", []):
+                config["filters"].remove(filter_name)
+                if filter_name in config.get("filter_params", {}):
+                    del config["filter_params"][filter_name]
+        
+        elif adj["type"] == "Invert":
+            config["invert"] = False
+            
+        elif adj["type"] == "Transform":
+            index = adj["index"]
+            transforms = config.get("transforms", [])
+            if 0 <= index < len(transforms):
+                # Need to be careful about index if multiple transforms are removed.
+                # But since we refresh the list after each undo, it should be fine.
+                # However, it's safer to identify the transform uniquely if possible.
+                # For now, index is okay because we refresh.
+                transforms.pop(index)
+
+        asset.save_project()
+        self.cached_composite = None
+        self._update_asset_list()
+        self._refresh_viewer()
 
     def _change_color(self, name, color_name, is_mask=False):
         asset = self.asset_manager.get_image_by_name(name)
@@ -1263,6 +1770,81 @@ class MainWindow(QMainWindow):
             self.cached_composite = None
             self._refresh_viewer()
 
+    def _merge_selected_masks(self):
+        selected = self.mask_list.selectedItems()
+        if len(selected) < 2:
+            QMessageBox.warning(self, "Merge", "Please select two or more masks to merge.")
+            return
+
+        name, ok = QInputDialog.getText(self, "Merge Masks", "Enter name for the new mask:")
+        if not ok or not name:
+            return
+
+        if not name.lower().endswith(".npy"):
+            name += ".npy"
+
+        # Ensure name starts with a recognized prefix for consistency,
+        # though the list will now show any .npy file.
+        prefixes = ("KC_", "GMM_", "ISODATA_", "ThresholdMask_", "Merged_")
+        starts_with_prefix = False
+        for p in prefixes:
+            if name.upper().startswith(p.upper()):
+                starts_with_prefix = True
+                break
+        
+        if not starts_with_prefix:
+            name = "Merged_" + name
+
+        mask_dir = os.path.join(self.working_dir, "Cluster Masks")
+        merged_mask = None
+
+        for item in selected:
+            mask_name = item.text()
+            mask_path = os.path.join(mask_dir, mask_name)
+            if os.path.exists(mask_path):
+                mask = np.load(mask_path)
+                if merged_mask is None:
+                    merged_mask = mask.astype(bool)
+                else:
+                    if merged_mask.shape == mask.shape:
+                        merged_mask = np.logical_or(merged_mask, mask.astype(bool))
+                    else:
+                        QMessageBox.warning(self, "Merge", f"Mask '{mask_name}' has different dimensions and will be skipped.")
+
+        if merged_mask is not None:
+            # Save the merged mask
+            new_path = os.path.join(mask_dir, name)
+            np.save(new_path, merged_mask.astype(np.uint8)) # Store as uint8 for consistency
+            self._update_mask_list()
+            self.cached_composite = None
+            self._refresh_viewer()
+            QMessageBox.information(self, "Merge", f"Masks merged and saved as '{name}'.")
+
+    def _save_visible_masks(self):
+        if not self.visible_masks and self.preview_mask is None:
+            QMessageBox.warning(self, "Save Masks", "No masks are currently visible.")
+            return
+
+        # Ensure viewer is refreshed to have the latest composite
+        self._refresh_viewer()
+        
+        if self.cached_composite is None:
+            QMessageBox.warning(self, "Save Masks", "No visible images or masks to save.")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Save Visible Masks", self.working_dir, "PNG Files (*.png)"
+        )
+
+        if file_path:
+            if not file_path.lower().endswith('.png'):
+                file_path += '.png'
+            
+            if self.cached_composite.save(file_path, "PNG"):
+                QMessageBox.information(self, "Save Masks", f"Visible masks saved to {file_path}")
+            else:
+                QMessageBox.critical(self, "Save Masks", "Failed to save the image.")
+
     def _asset_clicked(self, item):
         name = item.text()
         self.image_handler.toggle_visibility(name)
@@ -1294,6 +1876,7 @@ class MainWindow(QMainWindow):
                         else:
                             return
                     composite_rgba = np.zeros((h, w, 4), dtype=np.float32)
+                    composite_rgba[:, :, 3] = 1.0 # Set alpha to 1.0 for blank slate
                 else:
                     # Convert QImage to numpy RGBA
                     qimg = self.cached_composite.convertToFormat(QImage.Format_RGBA8888)
