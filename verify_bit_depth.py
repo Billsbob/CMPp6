@@ -29,15 +29,15 @@ def test_bit_depth_preservation():
     asset_16 = Asset("test_16bit.tif")
     data_16 = asset_16.data
     print(f"Loaded dtype = {data_16.dtype}")
-    rendered_16 = asset_16.get_rendered_data(for_clustering=True)
+    rendered_16 = asset_16.get_rendered_data(data_only=True)
     print(f"Rendered (clustering) dtype = {rendered_16.dtype}")
     
     # Check K-means on 16-bit
-    labels_kmeans_16 = clustering.apply_kmeans(rendered_16, n_clusters=3, normalize=False)
+    labels_kmeans_16 = clustering.kmeans_clustering(rendered_16[np.newaxis, ...], n_clusters=3, normalize=False)
     print(f"K-means labels shape: {labels_kmeans_16.shape}")
     
     # Check ISODATA on 16-bit
-    labels_iso_16 = clustering.apply_isodata(rendered_16, initial_clusters=3, normalize=False)
+    labels_iso_16 = clustering.isodata_clustering(rendered_16[np.newaxis, ...], n_clusters=3, normalize=False)
     print(f"ISODATA labels shape: {labels_iso_16.shape}")
 
     # Test 32-bit float
@@ -45,11 +45,11 @@ def test_bit_depth_preservation():
     asset_32f = Asset("test_32f.tif")
     data_32f = asset_32f.data
     print(f"Loaded dtype = {data_32f.dtype}")
-    rendered_32f = asset_32f.get_rendered_data(for_clustering=True)
+    rendered_32f = asset_32f.get_rendered_data(data_only=True)
     print(f"Rendered (clustering) dtype = {rendered_32f.dtype}")
     
     # Check K-means on 32-bit float
-    labels_kmeans_32f = clustering.apply_kmeans(rendered_32f, n_clusters=3, normalize=True)
+    labels_kmeans_32f = clustering.kmeans_clustering(rendered_32f[np.newaxis, ...], n_clusters=3, normalize=True)
     print(f"K-means (normalized) labels shape: {labels_kmeans_32f.shape}")
     
     # Clean up

@@ -31,10 +31,6 @@ args = [
     '--hidden-import', 'sklearn.neighbors._partition_nodes',
     '--hidden-import', 'sklearn.neighbors._quad_tree',
     '--hidden-import', 'sklearn.tree._utils',
-    '--hidden-import', 'pynndescent',
-    '--hidden-import', 'umap',
-    '--hidden-import', 'igraph',
-    '--hidden-import', 'leidenalg',
     '--hidden-import', 'sklearn.utils._cython_blas',
     '--hidden-import', 'sklearn.neighbors._typedefs',
     '--hidden-import', 'scipy.special.cython_special',
@@ -67,7 +63,7 @@ if __name__ == '__main__':
 import os
 import sys
 
-# Increase recursion limit for deep dependency trees like scanpy
+# Increase recursion limit for deep dependency trees
 sys.setrecursionlimit(5000)
 
 a = Analysis(
@@ -81,13 +77,6 @@ a = Analysis(
         'sklearn.neighbors._quad_tree',
         'sklearn.tree._utils',
         'sklearn.utils._cython_blas',
-        'sklearn.neighbors._typedefs',
-        'pynndescent',
-        'umap',
-        'igraph',
-        'leidenalg',
-        'scanpy',
-        'anndata',
         'scipy.special.cython_special',
         'scipy.stats._stats'
     ],

@@ -1,12 +1,11 @@
 from PySide6.QtWidgets import (
     QMainWindow, QMenu, QMenuBar, QFileDialog, QListWidget, QListWidgetItem, 
     QWidget, QVBoxLayout, QLabel, QMdiArea, QMdiSubWindow, QDockWidget,
-    QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsRectItem, QFrame, 
-    QMessageBox, QPushButton, QHBoxLayout, QDialog, QFormLayout, QDoubleSpinBox, 
+    QMessageBox, QPushButton, QHBoxLayout, QFormLayout, QDoubleSpinBox, 
     QSpinBox, QDialogButtonBox, QLineEdit, QComboBox, QInputDialog, QSlider,
-    QApplication, QCheckBox
+    QApplication, QCheckBox, QDialog
 )
-from PySide6.QtGui import QAction, QPixmap, QPainter, QWheelEvent, QPalette, QPen, QColor, QBrush, QImage
+from PySide6.QtGui import QAction, QPixmap, QPainter, QPalette, QPen, QColor, QBrush, QImage
 from PySide6.QtCore import Qt, QSize, QPoint, QPointF, QRectF, Signal, QObject, QThread
 import os
 import numpy as np
@@ -17,595 +16,12 @@ from image_handler import ImageDisplayHandler
 import image_stacker
 import clustering
 import graphing
-
-class ClusteringWorker(QObject):
-    finished = Signal(object, str, int)  # result_mask, mask_root_name, n_clusters
-    error = Signal(str)
-
-    def __init__(self, algorithm, stack, mask, params, mask_root_name):
-        super().__init__()
-        self.algorithm = algorithm
-        self.stack = stack.astype(np.float32) if stack is not None else None
-        self.mask = mask
-        self.params = params
-        self.mask_root_name = mask_root_name
-
-    def run(self):
-        try:
-            if self.algorithm == "kmeans":
-                result_mask = clustering.kmeans_clustering(self.stack, mask=self.mask, **self.params)
-                n_clusters = self.params["n_clusters"]
-            elif self.algorithm == "gmm":
-                result_mask = clustering.gaussian_mixture_clustering(self.stack, mask=self.mask, **self.params)
-                n_clusters = self.params["n_components"]
-            elif self.algorithm == "isodata":
-                result_mask = clustering.isodata_clustering(self.stack, mask=self.mask, **self.params)
-                # For ISODATA, the number of clusters can change. 
-                # We need to find the unique labels in result_mask (excluding -1)
-                unique_labels = np.unique(result_mask)
-                n_clusters = len(unique_labels[unique_labels != -1])
-            else:
-                raise ValueError(f"Unknown algorithm: {self.algorithm}")
-            
-            self.finished.emit(result_mask, self.mask_root_name, n_clusters)
-        except Exception as e:
-            self.error.emit(str(e))
-
-class ZoomableView(QGraphicsView):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
-        self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.setBackgroundRole(QPalette.NoRole)
-        self.setFrameShape(QFrame.NoFrame)
-
-        self.scene = QGraphicsScene(self)
-        self.setScene(self.scene)
-
-        self.pixmap_item = QGraphicsPixmapItem()
-        self.scene.addItem(self.pixmap_item)
-
-        self.selection_rect_item = None
-        self.start_scene_pos = None
-        self.moving_selection = False
-        self.move_offset = QPointF()
-        self.zoom_factor = 1.0
-
-    def set_pixmap(self, pixmap):
-        if pixmap:
-            if isinstance(pixmap, QImage):
-                pixmap = QPixmap.fromImage(pixmap)
-            self.pixmap_item.setPixmap(pixmap)
-            self.scene.setSceneRect(QRectF(pixmap.rect()))
-            self.viewport().update()
-        else:
-            self.pixmap_item.setPixmap(QPixmap())
-            self.scene.setSceneRect(QRectF())
-        self.clear_selection()
-
-    def clear_selection(self):
-        if self.selection_rect_item:
-            self.scene.removeItem(self.selection_rect_item)
-            self.selection_rect_item = None
-        self.start_scene_pos = None
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            scene_pos = self.mapToScene(event.pos())
-            
-            if self.selection_rect_item and self.selection_rect_item.rect().contains(scene_pos):
-                self.moving_selection = True
-                self.move_offset = scene_pos - self.selection_rect_item.rect().topLeft()
-                self.start_scene_pos = scene_pos
-            else:
-                self.moving_selection = False
-                self.start_scene_pos = scene_pos
-                if self.selection_rect_item:
-                    self.scene.removeItem(self.selection_rect_item)
-                    self.selection_rect_item = None
-                
-                self.selection_rect_item = QGraphicsRectItem()
-                pen = QPen(QColor(255, 255, 0), 2)
-                pen.setCosmetic(True)
-                self.selection_rect_item.setPen(pen)
-                self.selection_rect_item.setBrush(QBrush(QColor(255, 255, 0, 50)))
-                self.scene.addItem(self.selection_rect_item)
-                self.selection_rect_item.setRect(QRectF(self.start_scene_pos, QSize(0, 0)))
-        else:
-            super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self.start_scene_pos is not None and self.selection_rect_item:
-            current_scene_pos = self.mapToScene(event.pos())
-            img_rect = self.pixmap_item.boundingRect()
-
-            if self.moving_selection:
-                new_top_left = current_scene_pos - self.move_offset
-                rect = self.selection_rect_item.rect()
-                rect.moveTo(new_top_left)
-                
-                if rect.left() < img_rect.left():
-                    rect.moveLeft(img_rect.left())
-                if rect.right() > img_rect.right():
-                    rect.moveRight(img_rect.right())
-                if rect.top() < img_rect.top():
-                    rect.moveTop(img_rect.top())
-                if rect.bottom() > img_rect.bottom():
-                    rect.moveBottom(img_rect.bottom())
-                
-                self.selection_rect_item.setRect(rect)
-            else:
-                rect = QRectF(self.start_scene_pos, current_scene_pos).normalized()
-                rect = rect.intersected(img_rect)
-                self.selection_rect_item.setRect(rect)
-        else:
-            super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.start_scene_pos = None
-            self.moving_selection = False
-        super().mouseReleaseEvent(event)
-
-    def get_selection_rect(self):
-        if self.selection_rect_item:
-            rect = self.selection_rect_item.rect()
-            return (int(rect.x()), int(rect.y()), int(rect.width()), int(rect.height()))
-        return None
-
-    def wheelEvent(self, event: QWheelEvent):
-        factor = 1.15
-        if event.angleDelta().y() < 0:
-            factor = 1.0 / factor
-        
-        if event.modifiers() == Qt.ControlModifier:
-            self.scale(factor, factor)
-            self.zoom_factor *= factor
-        else:
-            super().wheelEvent(event)
-
-class FilterParameterDialog(QDialog):
-    def __init__(self, filter_name, initial_params, parent=None):
-        super().__init__(parent)
-        self.filter_name = filter_name
-        self.params = initial_params.copy()
-        self.setup_ui()
-
-    def setup_ui(self):
-        self.setWindowTitle(f"{self.filter_name.capitalize()} Parameters")
-        layout = QVBoxLayout(self)
-        form_layout = QFormLayout()
-
-        if self.filter_name == "gaussian":
-            self.radius_spin = QDoubleSpinBox()
-            self.radius_spin.setRange(0.1, 100.0)
-            self.radius_spin.setValue(self.params.get("radius", 2.0))
-            self.radius_spin.valueChanged.connect(lambda v: self._update_param("radius", v))
-            form_layout.addRow("Radius:", self.radius_spin)
-        elif self.filter_name in ["median", "mean", "blur"]:
-            self.size_spin = QSpinBox()
-            self.size_spin.setRange(1, 101)
-            self.size_spin.setSingleStep(2)
-            self.size_spin.setValue(self.params.get("size", 3))
-            self.size_spin.valueChanged.connect(lambda v: self._update_param("size", v))
-            form_layout.addRow("Size:", self.size_spin)
-        elif self.filter_name == "unsharp":
-            self.radius_spin = QDoubleSpinBox()
-            self.radius_spin.setValue(self.params.get("radius", 2.0))
-            self.radius_spin.valueChanged.connect(lambda v: self._update_param("radius", v))
-            form_layout.addRow("Radius:", self.radius_spin)
-            
-            self.percent_spin = QSpinBox()
-            self.percent_spin.setRange(1, 1000)
-            self.percent_spin.setValue(self.params.get("percent", 150))
-            self.percent_spin.valueChanged.connect(lambda v: self._update_param("percent", v))
-            form_layout.addRow("Percent:", self.percent_spin)
-            
-            self.threshold_spin = QSpinBox()
-            self.threshold_spin.setRange(0, 255)
-            self.threshold_spin.setValue(self.params.get("threshold", 3))
-            self.threshold_spin.valueChanged.connect(lambda v: self._update_param("threshold", v))
-            form_layout.addRow("Threshold:", self.threshold_spin)
-
-        layout.addLayout(form_layout)
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def _update_param(self, key, value):
-        self.params[key] = value
-
-    def get_params(self):
-        return self.params
-
-class ClusterParameterDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.params = {
-            "n_clusters": 8,
-            "max_iter": 300,
-            "init": "k-means++",
-            "n_init": 10,
-            "random_state": 0,
-            "algorithm": "auto",
-            "normalize": False,
-            "normalize_stack": False,
-            "tol": 1e-4,
-            "cluster_under_mask": False
-        }
-        self.setup_ui()
-
-    def setup_ui(self):
-        self.setWindowTitle("K-Means Parameters")
-        layout = QVBoxLayout(self)
-        form_layout = QFormLayout()
-
-        self.n_clusters_spin = QSpinBox()
-        self.n_clusters_spin.setRange(2, 100)
-        self.n_clusters_spin.setValue(self.params["n_clusters"])
-        form_layout.addRow("Number of Clusters:", self.n_clusters_spin)
-
-        self.max_iter_spin = QSpinBox()
-        self.max_iter_spin.setRange(1, 10000)
-        self.max_iter_spin.setValue(self.params["max_iter"])
-        form_layout.addRow("Max Iterations:", self.max_iter_spin)
-
-        self.init_combo = QComboBox()
-        self.init_combo.addItems(["k-means++", "random"])
-        self.init_combo.setCurrentText(self.params["init"])
-        form_layout.addRow("Init:", self.init_combo)
-
-        self.n_init_spin = QSpinBox()
-        self.n_init_spin.setRange(1, 100)
-        self.n_init_spin.setValue(self.params["n_init"])
-        form_layout.addRow("N Init:", self.n_init_spin)
-
-        self.random_state_spin = QSpinBox()
-        self.random_state_spin.setRange(0, 1000000)
-        self.random_state_spin.setValue(self.params["random_state"])
-        form_layout.addRow("Random State:", self.random_state_spin)
-
-        self.algorithm_combo = QComboBox()
-        self.algorithm_combo.addItems(["auto", "lloyd", "elkan", "full"])
-        self.algorithm_combo.setCurrentText(self.params["algorithm"])
-        form_layout.addRow("Algorithm:", self.algorithm_combo)
-
-        self.normalize_check = QCheckBox()
-        self.normalize_check.setChecked(self.params["normalize"])
-        form_layout.addRow("Normalize (per image):", self.normalize_check)
-
-        self.normalize_stack_check = QCheckBox()
-        self.normalize_stack_check.setChecked(self.params["normalize_stack"])
-        form_layout.addRow("Normalize (entire stack):", self.normalize_stack_check)
-
-        self.tol_spin = QDoubleSpinBox()
-        self.tol_spin.setRange(0, 1)
-        self.tol_spin.setDecimals(6)
-        self.tol_spin.setSingleStep(0.0001)
-        self.tol_spin.setValue(self.params["tol"])
-        form_layout.addRow("Tolerance:", self.tol_spin)
-
-        self.cluster_under_mask_check = QCheckBox()
-        self.cluster_under_mask_check.setChecked(self.params["cluster_under_mask"])
-        form_layout.addRow("Cluster under selected mask:", self.cluster_under_mask_check)
-
-        layout.addLayout(form_layout)
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def get_params(self):
-        return {
-            "n_clusters": self.n_clusters_spin.value(),
-            "max_iter": self.max_iter_spin.value(),
-            "init": self.init_combo.currentText(),
-            "n_init": self.n_init_spin.value(),
-            "random_state": self.random_state_spin.value(),
-            "algorithm": self.algorithm_combo.currentText(),
-            "normalize": self.normalize_check.isChecked(),
-            "normalize_stack": self.normalize_stack_check.isChecked(),
-            "tol": self.tol_spin.value(),
-            "cluster_under_mask": self.cluster_under_mask_check.isChecked()
-        }
-
-class ISODATAParameterDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.params = {
-            "n_clusters": 8,
-            "max_iter": 100,
-            "min_samples": 20,
-            "max_std_dev": 0.1,
-            "min_cluster_distance": 0.1,
-            "max_merge_pairs": 2,
-            "random_state": 0,
-            "normalize": False,
-            "normalize_stack": False,
-            "cluster_under_mask": False
-        }
-        self.setup_ui()
-
-    def setup_ui(self):
-        self.setWindowTitle("ISODATA Parameters")
-        layout = QVBoxLayout(self)
-        form_layout = QFormLayout()
-
-        self.n_clusters_spin = QSpinBox()
-        self.n_clusters_spin.setRange(2, 100)
-        self.n_clusters_spin.setValue(self.params["n_clusters"])
-        form_layout.addRow("Initial Clusters:", self.n_clusters_spin)
-
-        self.max_iter_spin = QSpinBox()
-        self.max_iter_spin.setRange(1, 1000)
-        self.max_iter_spin.setValue(self.params["max_iter"])
-        form_layout.addRow("Max Iterations:", self.max_iter_spin)
-
-        self.min_samples_spin = QSpinBox()
-        self.min_samples_spin.setRange(1, 10000)
-        self.min_samples_spin.setValue(self.params["min_samples"])
-        form_layout.addRow("Min Samples per Cluster:", self.min_samples_spin)
-
-        self.max_std_dev_spin = QDoubleSpinBox()
-        self.max_std_dev_spin.setRange(0.0001, 10.0)
-        self.max_std_dev_spin.setDecimals(4)
-        self.max_std_dev_spin.setValue(self.params["max_std_dev"])
-        form_layout.addRow("Max Std Dev (Split):", self.max_std_dev_spin)
-
-        self.min_cluster_distance_spin = QDoubleSpinBox()
-        self.min_cluster_distance_spin.setRange(0.0001, 10.0)
-        self.min_cluster_distance_spin.setDecimals(4)
-        self.min_cluster_distance_spin.setValue(self.params["min_cluster_distance"])
-        form_layout.addRow("Min Cluster Dist (Merge):", self.min_cluster_distance_spin)
-
-        self.max_merge_pairs_spin = QSpinBox()
-        self.max_merge_pairs_spin.setRange(1, 100)
-        self.max_merge_pairs_spin.setValue(self.params["max_merge_pairs"])
-        form_layout.addRow("Max Merge Pairs:", self.max_merge_pairs_spin)
-
-        self.random_state_spin = QSpinBox()
-        self.random_state_spin.setRange(0, 1000000)
-        self.random_state_spin.setValue(self.params["random_state"])
-        form_layout.addRow("Random State:", self.random_state_spin)
-
-        self.normalize_check = QCheckBox()
-        self.normalize_check.setChecked(self.params["normalize"])
-        form_layout.addRow("Normalize (per image):", self.normalize_check)
-
-        self.normalize_stack_check = QCheckBox()
-        self.normalize_stack_check.setChecked(self.params["normalize_stack"])
-        form_layout.addRow("Normalize (entire stack):", self.normalize_stack_check)
-
-        self.cluster_under_mask_check = QCheckBox()
-        self.cluster_under_mask_check.setChecked(self.params["cluster_under_mask"])
-        form_layout.addRow("Cluster under selected mask:", self.cluster_under_mask_check)
-
-        layout.addLayout(form_layout)
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def get_params(self):
-        return {
-            "n_clusters": self.n_clusters_spin.value(),
-            "max_iter": self.max_iter_spin.value(),
-            "min_samples": self.min_samples_spin.value(),
-            "max_std_dev": self.max_std_dev_spin.value(),
-            "min_cluster_distance": self.min_cluster_distance_spin.value(),
-            "max_merge_pairs": self.max_merge_pairs_spin.value(),
-            "random_state": self.random_state_spin.value(),
-            "normalize": self.normalize_check.isChecked(),
-            "normalize_stack": self.normalize_stack_check.isChecked(),
-            "cluster_under_mask": self.cluster_under_mask_check.isChecked()
-        }
-
-class GMMParameterDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.params = {
-            "n_components": 8,
-            "covariance_type": "full",
-            "tol": 1e-3,
-            "max_iter": 100,
-            "random_state": 0,
-            "normalize": False,
-            "normalize_stack": False,
-            "cluster_under_mask": False
-        }
-        self.setup_ui()
-
-    def setup_ui(self):
-        self.setWindowTitle("GMM Parameters")
-        layout = QVBoxLayout(self)
-        form_layout = QFormLayout()
-
-        self.n_components_spin = QSpinBox()
-        self.n_components_spin.setRange(1, 100)
-        self.n_components_spin.setValue(self.params["n_components"])
-        form_layout.addRow("Number of Components:", self.n_components_spin)
-
-        self.covariance_combo = QComboBox()
-        self.covariance_combo.addItems(["full", "tied", "diag", "spherical"])
-        self.covariance_combo.setCurrentText(self.params["covariance_type"])
-        form_layout.addRow("Covariance Type:", self.covariance_combo)
-
-        self.tol_spin = QDoubleSpinBox()
-        self.tol_spin.setRange(0, 1)
-        self.tol_spin.setDecimals(6)
-        self.tol_spin.setSingleStep(0.0001)
-        self.tol_spin.setValue(self.params["tol"])
-        form_layout.addRow("Tolerance:", self.tol_spin)
-
-        self.max_iter_spin = QSpinBox()
-        self.max_iter_spin.setRange(1, 10000)
-        self.max_iter_spin.setValue(self.params["max_iter"])
-        form_layout.addRow("Max Iterations:", self.max_iter_spin)
-
-        self.random_state_spin = QSpinBox()
-        self.random_state_spin.setRange(0, 1000000)
-        self.random_state_spin.setValue(self.params["random_state"])
-        form_layout.addRow("Random State:", self.random_state_spin)
-
-        self.normalize_check = QCheckBox()
-        self.normalize_check.setChecked(self.params["normalize"])
-        form_layout.addRow("Normalize (per image):", self.normalize_check)
-
-        self.normalize_stack_check = QCheckBox()
-        self.normalize_stack_check.setChecked(self.params["normalize_stack"])
-        form_layout.addRow("Normalize (entire stack):", self.normalize_stack_check)
-
-        self.cluster_under_mask_check = QCheckBox()
-        self.cluster_under_mask_check.setChecked(self.params["cluster_under_mask"])
-        form_layout.addRow("Cluster under selected mask:", self.cluster_under_mask_check)
-
-        layout.addLayout(form_layout)
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def get_params(self):
-        return {
-            "n_components": self.n_components_spin.value(),
-            "covariance_type": self.covariance_combo.currentText(),
-            "tol": self.tol_spin.value(),
-            "max_iter": self.max_iter_spin.value(),
-            "random_state": self.random_state_spin.value(),
-            "normalize": self.normalize_check.isChecked(),
-            "normalize_stack": self.normalize_stack_check.isChecked(),
-            "cluster_under_mask": self.cluster_under_mask_check.isChecked()
-        }
-
-class ThresholdParameterDialog(QDialog):
-    params_changed = Signal(dict)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Threshold Parameters")
-        self.setup_ui()
-
-    def setup_ui(self):
-        layout = QVBoxLayout(self)
-        form_layout = QFormLayout()
-
-        self.threshold_spin = QDoubleSpinBox()
-        self.threshold_spin.setRange(0, 1000000)
-        self.threshold_spin.setValue(128.0)
-        self.threshold_spin.valueChanged.connect(self._emit_params)
-        form_layout.addRow("Threshold:", self.threshold_spin)
-
-        self.normalize_check = QCheckBox("Normalize stack before max projection")
-        self.normalize_check.setChecked(False)
-        self.normalize_check.toggled.connect(self._emit_params)
-        form_layout.addRow(self.normalize_check)
-
-        layout.addLayout(form_layout)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def _emit_params(self):
-        self.params_changed.emit(self.get_params())
-
-    def get_params(self):
-        return {
-            "threshold": self.threshold_spin.value(),
-            "normalize": self.normalize_check.isChecked()
-        }
-
-class ImageAdjustmentsDialog(QDialog):
-    def __init__(self, assets, parent=None):
-        super().__init__(parent)
-        self.assets = assets
-        self.setWindowTitle("Image Adjustments")
-        self.setMinimumSize(400, 300)
-        self.setup_ui()
-
-    def setup_ui(self):
-        layout = QVBoxLayout(self)
-        
-        self.adj_list = QListWidget()
-        self.adj_list.itemClicked.connect(self.on_item_clicked)
-        layout.addWidget(QLabel("Applied Adjustments (Click to undo):"))
-        layout.addWidget(self.adj_list)
-        
-        self.refresh_list()
-        
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.accept)
-        layout.addWidget(close_btn)
-
-    def refresh_list(self):
-        self.adj_list.clear()
-        if not self.assets:
-            return
-        
-        # We'll list common adjustments among all selected assets.
-        # However, for simplicity and to follow the requirement "list of all the adjustments that have been applied to the selected images",
-        # if multiple images are selected, we can list adjustments from all of them, identifying which image they belong to.
-        # BUT, if they are the same adjustment across images, we can group them.
-        
-        # Let's collect all unique adjustments.
-        all_adjustments = []
-        
-        for asset in self.assets:
-            config = asset.pipeline.config
-            
-            # Filters
-            for f in config.get("filters", []):
-                all_adjustments.append({
-                    "type": "Filter",
-                    "name": f,
-                    "asset_name": asset.name,
-                    "label": f"Filter: {f.capitalize()} (on {asset.name})",
-                    "data": f
-                })
-            
-            # Invert
-            if config.get("invert", False):
-                all_adjustments.append({
-                    "type": "Invert",
-                    "name": "invert",
-                    "asset_name": asset.name,
-                    "label": f"Invert (on {asset.name})",
-                    "data": None
-                })
-            
-            # Transforms (Crop, Rotate)
-            for i, t in enumerate(config.get("transforms", [])):
-                t_type = t["type"]
-                label = f"{t_type.capitalize()} (on {asset.name})"
-                if t_type == "rotate":
-                    label = f"Rotate: {t['angle']}° (on {asset.name})"
-                elif t_type == "crop":
-                    label = f"Crop: {t['params']} (on {asset.name})"
-                
-                all_adjustments.append({
-                    "type": "Transform",
-                    "name": t_type,
-                    "asset_name": asset.name,
-                    "label": label,
-                    "index": i,
-                    "data": t
-                })
-        
-        for adj in all_adjustments:
-            item = QListWidgetItem(adj["label"])
-            item.setData(Qt.UserRole, adj)
-            self.adj_list.addItem(item)
-
-    def on_item_clicked(self, item):
-        adj = item.data(Qt.UserRole)
-        msg = f"Are you sure you want to undo '{adj['label']}'?"
-        if QMessageBox.question(self, "Undo Adjustment", msg) == QMessageBox.Yes:
-            self.parent()._undo_adjustment(adj)
-            self.refresh_list()
+from workers import ClusteringWorker
+from widgets import ZoomableView
+from dialogs import (
+    FilterParameterDialog, ClusterParameterDialog, ISODATAParameterDialog,
+    GMMParameterDialog, ThresholdParameterDialog, ImageAdjustmentsDialog
+)
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -806,6 +222,15 @@ class MainWindow(QMainWindow):
         home_action.triggered.connect(self._home_triggered)
         menu_bar.addAction(home_action)
 
+        file_menu = menu_bar.addMenu("File")
+        import_image_action = QAction("Import Image", self)
+        import_image_action.triggered.connect(self._import_image)
+        file_menu.addAction(import_image_action)
+
+        import_mask_action = QAction("Import Mask", self)
+        import_mask_action.triggered.connect(self._import_mask)
+        file_menu.addAction(import_mask_action)
+
         tools_menu = menu_bar.addMenu("Tools")
         
         adj_action = QAction("Image Adjustments", self)
@@ -875,6 +300,57 @@ class MainWindow(QMainWindow):
             self._update_graph_list()
             self._refresh_viewer()
             self.bg_label.lower()
+
+    def _import_image(self):
+        if not self.working_dir:
+            QMessageBox.warning(self, "No Working Directory", "Please select a working directory (Home) first.")
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Import Image", "", "Images (*.tif *.tiff *.png *.bmp *.jpg *.jpeg)"
+        )
+
+        if file_path:
+            import shutil
+            dest_path = os.path.join(self.working_dir, os.path.basename(file_path))
+            
+            if os.path.abspath(file_path) == os.path.abspath(dest_path):
+                QMessageBox.information(self, "Import Image", "Image is already in the working directory.")
+            else:
+                try:
+                    shutil.copy(file_path, dest_path)
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to copy image: {str(e)}")
+                    return
+
+            self.asset_manager.scan_assets()
+            self._update_asset_list()
+
+    def _import_mask(self):
+        if not self.working_dir:
+            QMessageBox.warning(self, "No Working Directory", "Please select a working directory (Home) first.")
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Import Mask", "", "Mask Files (*.npy)"
+        )
+
+        if file_path:
+            import shutil
+            mask_dir = os.path.join(self.working_dir, "Cluster Masks")
+            os.makedirs(mask_dir, exist_ok=True)
+            dest_path = os.path.join(mask_dir, os.path.basename(file_path))
+
+            if os.path.abspath(file_path) == os.path.abspath(dest_path):
+                QMessageBox.information(self, "Import Mask", "Mask is already in the cluster masks directory.")
+            else:
+                try:
+                    shutil.copy(file_path, dest_path)
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to copy mask: {str(e)}")
+                    return
+
+            self._update_mask_list()
 
     def _update_asset_list(self):
         # Block signals to prevent _asset_clicked from being triggered during refresh
