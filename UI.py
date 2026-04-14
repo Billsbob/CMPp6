@@ -20,7 +20,7 @@ from workers import ClusteringWorker
 from widgets import ZoomableView
 from dialogs import (
     FilterParameterDialog, ClusterParameterDialog, ISODATAParameterDialog,
-    GMMParameterDialog, ThresholdParameterDialog, ImageAdjustmentsDialog
+    GMMParameterDialog, ThresholdParameterDialog
 )
 
 class MainWindow(QMainWindow):
@@ -121,6 +121,8 @@ class MainWindow(QMainWindow):
 
         self.mask_list = QListWidget()
         self.mask_list.setSelectionMode(QListWidget.MultiSelection)
+        self.mask_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.mask_list.customContextMenuRequested.connect(self._show_mask_context_menu)
         self.mask_list.itemClicked.connect(self._mask_clicked)
         
         mask_h_layout.addLayout(mask_btn_layout)
@@ -161,6 +163,8 @@ class MainWindow(QMainWindow):
 
         self.graph_list = QListWidget()
         self.graph_list.setSelectionMode(QListWidget.MultiSelection)
+        self.graph_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.graph_list.customContextMenuRequested.connect(self._show_graph_context_menu)
         self.graph_list.itemClicked.connect(self._graph_clicked)
         
         graph_h_layout.addLayout(graph_btn_layout)
@@ -233,12 +237,6 @@ class MainWindow(QMainWindow):
 
         tools_menu = menu_bar.addMenu("Tools")
         
-        adj_action = QAction("Image Adjustments", self)
-        adj_action.triggered.connect(self._show_image_adjustments)
-        tools_menu.addAction(adj_action)
-        
-        tools_menu.addSeparator()
-
         invert_action = QAction("Invert", self)
         invert_action.triggered.connect(self._invert_selected_images)
         tools_menu.addAction(invert_action)
@@ -282,6 +280,19 @@ class MainWindow(QMainWindow):
         isodata_action = QAction("ISODATA", self)
         isodata_action.triggered.connect(self._run_isodata)
         cluster_menu.addAction(isodata_action)
+
+        adjustments_menu = menu_bar.addMenu("Adjustments")
+        undo_invert_action = QAction("Undo Invert", self)
+        undo_invert_action.triggered.connect(self._undo_invert_selected)
+        adjustments_menu.addAction(undo_invert_action)
+
+        undo_rotation_action = QAction("Undo Rotation", self)
+        undo_rotation_action.triggered.connect(self._undo_rotation_selected)
+        adjustments_menu.addAction(undo_rotation_action)
+
+        undo_crop_action = QAction("Undo Crop", self)
+        undo_crop_action.triggered.connect(self._undo_crop_selected)
+        adjustments_menu.addAction(undo_crop_action)
 
         analyze_menu = menu_bar.addMenu("Analyze")
         create_hist_action = QAction("Create Histograms", self)
@@ -1000,6 +1011,58 @@ class MainWindow(QMainWindow):
         if not item: return
         self._show_context_menu(self.image_list, position, False)
 
+    def _show_mask_context_menu(self, position):
+        item = self.mask_list.itemAt(position)
+        if not item: return
+        
+        menu = QMenu()
+        rename_action = QAction("Rename", self)
+        rename_action.triggered.connect(lambda: self._rename_item(item, "Cluster Masks", self.mask_list))
+        menu.addAction(rename_action)
+        menu.exec(self.mask_list.mapToGlobal(position))
+
+    def _show_graph_context_menu(self, position):
+        item = self.graph_list.itemAt(position)
+        if not item: return
+        
+        menu = QMenu()
+        rename_action = QAction("Rename", self)
+        rename_action.triggered.connect(lambda: self._rename_item(item, "Graphs", self.graph_list))
+        menu.addAction(rename_action)
+        menu.exec(self.graph_list.mapToGlobal(position))
+
+    def _rename_item(self, item, subfolder, list_widget):
+        if not self.working_dir: return
+        
+        old_name = item.text()
+        base_name, extension = os.path.splitext(old_name)
+        
+        new_name, ok = QInputDialog.getText(self, "Rename Item", "Enter new name:", QLineEdit.Normal, base_name)
+        
+        if ok and new_name and new_name != base_name:
+            new_filename = new_name + extension
+            old_path = os.path.join(self.working_dir, subfolder, old_name)
+            new_path = os.path.join(self.working_dir, subfolder, new_filename)
+            
+            if os.path.exists(new_path):
+                QMessageBox.warning(self, "Rename Error", f"A file with the name '{new_filename}' already exists.")
+                return
+                
+            try:
+                os.rename(old_path, new_path)
+                
+                # Update tracking if necessary (e.g., visible masks)
+                if subfolder == "Cluster Masks":
+                    if old_name in self.visible_masks:
+                        self.visible_masks.remove(old_name)
+                        self.visible_masks.add(new_filename)
+                    self._update_mask_list()
+                elif subfolder == "Graphs":
+                    self._update_graph_list()
+                    
+            except Exception as e:
+                QMessageBox.critical(self, "Rename Error", f"Failed to rename file: {str(e)}")
+
     def _show_context_menu(self, list_widget, position, is_mask):
         item = list_widget.itemAt(position)
         if not item: return
@@ -1027,51 +1090,59 @@ class MainWindow(QMainWindow):
 
         menu.exec(list_widget.mapToGlobal(position))
 
-    def _show_image_adjustments(self):
+
+    def _undo_invert_selected(self):
         selected = self.image_list.selectedItems()
         if not selected:
-            QMessageBox.information(self, "Image Adjustments", "Please select at least one image.")
+            QMessageBox.information(self, "Undo Invert", "Please select at least one image.")
             return
         
-        assets = []
         for item in selected:
             asset = self.asset_manager.get_image_by_name(item.text())
             if asset:
-                assets.append(asset)
+                asset.pipeline.config["invert"] = False
+                asset.save_project()
         
-        dialog = ImageAdjustmentsDialog(assets, self)
-        dialog.exec()
-
-    def _undo_adjustment(self, adj):
-        asset = self.asset_manager.get_image_by_name(adj["asset_name"])
-        if not asset: return
-        
-        config = asset.pipeline.config
-        
-        if adj["type"] == "Filter":
-            filter_name = adj["data"]
-            if filter_name in config.get("filters", []):
-                config["filters"].remove(filter_name)
-                if filter_name in config.get("filter_params", {}):
-                    del config["filter_params"][filter_name]
-        
-        elif adj["type"] == "Invert":
-            config["invert"] = False
-            
-        elif adj["type"] == "Transform":
-            index = adj["index"]
-            transforms = config.get("transforms", [])
-            if 0 <= index < len(transforms):
-                # Need to be careful about index if multiple transforms are removed.
-                # But since we refresh the list after each undo, it should be fine.
-                # However, it's safer to identify the transform uniquely if possible.
-                # For now, index is okay because we refresh.
-                transforms.pop(index)
-
-        asset.save_project()
         self.cached_composite = None
         self._update_asset_list()
         self._refresh_viewer()
+
+    def _undo_rotation_selected(self):
+        selected = self.image_list.selectedItems()
+        if not selected:
+            QMessageBox.information(self, "Undo Rotation", "Please select at least one image.")
+            return
+        
+        for item in selected:
+            asset = self.asset_manager.get_image_by_name(item.text())
+            if asset:
+                transforms = asset.pipeline.config.get("transforms", [])
+                # Filter out rotation transforms
+                asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "rotate"]
+                asset.save_project()
+        
+        self.cached_composite = None
+        self._update_asset_list()
+        self._refresh_viewer()
+
+    def _undo_crop_selected(self):
+        selected = self.image_list.selectedItems()
+        if not selected:
+            QMessageBox.information(self, "Undo Crop", "Please select at least one image.")
+            return
+        
+        for item in selected:
+            asset = self.asset_manager.get_image_by_name(item.text())
+            if asset:
+                transforms = asset.pipeline.config.get("transforms", [])
+                # Filter out crop transforms
+                asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "crop"]
+                asset.save_project()
+        
+        self.cached_composite = None
+        self._update_asset_list()
+        self._refresh_viewer()
+
 
     def _change_color(self, name, color_name, is_mask=False):
         asset = self.asset_manager.get_image_by_name(name)
