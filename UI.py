@@ -15,12 +15,15 @@ from assets import AssetManager
 from image_handler import ImageDisplayHandler
 import image_stacker
 import clustering
-import graphing
+import measure_utilities
+import histogram_plots
+import kde_plots
+import export_plot_utils
 from workers import ClusteringWorker
 from widgets import ZoomableView
 from dialogs import (
     FilterParameterDialog, ClusterParameterDialog, ISODATAParameterDialog,
-    GMMParameterDialog, ThresholdParameterDialog
+    GMMParameterDialog, ThresholdParameterDialog, JointPlotDialog
 )
 
 class MainWindow(QMainWindow):
@@ -255,6 +258,19 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked=False, name=f: self._apply_filter_to_visible(name))
             filters_menu.addAction(action)
 
+        image_adjustments_menu = tools_menu.addMenu("Image Adjustments")
+        undo_invert_action = QAction("Undo Invert", self)
+        undo_invert_action.triggered.connect(self._undo_invert_selected)
+        image_adjustments_menu.addAction(undo_invert_action)
+
+        undo_rotation_action = QAction("Undo Rotation", self)
+        undo_rotation_action.triggered.connect(self._undo_rotation_selected)
+        image_adjustments_menu.addAction(undo_rotation_action)
+
+        undo_crop_action = QAction("Undo Crop", self)
+        undo_crop_action.triggered.connect(self._undo_crop_selected)
+        image_adjustments_menu.addAction(undo_crop_action)
+
         tools_menu.addSeparator()
         export_images_action = QAction("Export Modified Images", self)
         export_images_action.triggered.connect(self._export_modified_images)
@@ -281,23 +297,14 @@ class MainWindow(QMainWindow):
         isodata_action.triggered.connect(self._run_isodata)
         cluster_menu.addAction(isodata_action)
 
-        adjustments_menu = menu_bar.addMenu("Adjustments")
-        undo_invert_action = QAction("Undo Invert", self)
-        undo_invert_action.triggered.connect(self._undo_invert_selected)
-        adjustments_menu.addAction(undo_invert_action)
-
-        undo_rotation_action = QAction("Undo Rotation", self)
-        undo_rotation_action.triggered.connect(self._undo_rotation_selected)
-        adjustments_menu.addAction(undo_rotation_action)
-
-        undo_crop_action = QAction("Undo Crop", self)
-        undo_crop_action.triggered.connect(self._undo_crop_selected)
-        adjustments_menu.addAction(undo_crop_action)
-
         analyze_menu = menu_bar.addMenu("Analyze")
         create_hist_action = QAction("Create Histograms", self)
         create_hist_action.triggered.connect(self._create_histograms_from_selection)
         analyze_menu.addAction(create_hist_action)
+
+        create_jointplot_action = QAction("Create Jointplot", self)
+        create_jointplot_action.triggered.connect(self._create_jointplot)
+        analyze_menu.addAction(create_jointplot_action)
 
     def _home_triggered(self):
         directory = QFileDialog.getExistingDirectory(self, "Select Working Directory")
@@ -406,7 +413,7 @@ class MainWindow(QMainWindow):
             return
         graph_dir = os.path.join(self.working_dir, "Graphs")
         if os.path.exists(graph_dir):
-            graphs = [f for f in os.listdir(graph_dir) if (f.startswith("Hist_") or f.startswith("Hist_Overlay_")) and f.endswith(".png")]
+            graphs = [f for f in os.listdir(graph_dir) if (f.startswith("Hist_") or f.startswith("Hist_Overlay_") or f.startswith("JointPlot_")) and f.endswith(".png")]
             try:
                 graphs.sort()
             except:
@@ -443,15 +450,15 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Calculating measurements and generating histograms...")
             QApplication.setOverrideCursor(Qt.WaitCursor)
             
-            measurements = graphing.calculate_mask_measurements(self.asset_manager, image_names, mask_path)
+            measurements = measure_utilities.calculate_mask_measurements(self.asset_manager, image_names, mask_path)
             if not measurements:
                 QMessageBox.critical(self, "Graphing", "Failed to calculate measurements.")
                 return
 
             graph_dir = os.path.join(self.working_dir, "Graphs")
-            graphing.create_histograms(measurements, mask_name, graph_dir)
-            graphing.create_overlaid_histogram(measurements, mask_name, graph_dir)
-            graphing.save_measurements_json(measurements, mask_name, graph_dir)
+            histogram_plots.create_histograms(measurements, mask_name, graph_dir)
+            histogram_plots.create_overlaid_histogram(measurements, mask_name, graph_dir)
+            export_plot_utils.save_measurements_json(measurements, mask_name, graph_dir)
 
             self.statusBar().showMessage("Graphing completed.", 3000)
             self._update_graph_list()
@@ -460,6 +467,88 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Graphing Error", f"An error occurred: {str(e)}")
         finally:
             QApplication.restoreOverrideCursor()
+
+    def _create_jointplot(self):
+        if not self.working_dir:
+            QMessageBox.warning(self, "Joint KDE Plot", "Please select a working directory first.")
+            return
+
+        # Get list of masks
+        mask_dir = os.path.join(self.working_dir, "Cluster Masks")
+        if not os.path.exists(mask_dir):
+            QMessageBox.warning(self, "Joint KDE Plot", "No masks found in working directory.")
+            return
+        
+        masks = [f for f in os.listdir(mask_dir) if f.endswith(".npy")]
+        if not masks:
+            QMessageBox.warning(self, "Joint KDE Plot", "No .npy masks found.")
+            return
+
+        # Get list of images
+        images = self.asset_manager.get_image_list()
+        if len(images) < 2:
+            QMessageBox.warning(self, "Joint KDE Plot", "Please import at least two images.")
+            return
+
+        dialog = JointPlotDialog(masks, images, self)
+        if dialog.exec() == QDialog.Accepted:
+            selections = dialog.get_selections()
+            
+            try:
+                self.statusBar().showMessage("Generating Joint KDE Plot...")
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+
+                all_measurements = []
+                for sel in selections:
+                    mask_name = sel["mask"]
+                    image1_name = sel["image1"]
+                    image2_name = sel["image2"]
+                    mask_path = os.path.join(mask_dir, mask_name)
+
+                    # Use the same function as histograms to get the data
+                    measurements = measure_utilities.calculate_mask_measurements(self.asset_manager, [image1_name, image2_name], mask_path)
+                    if not measurements or len(measurements) < 2:
+                        continue
+                    
+                    x_values = measurements[image1_name]
+                    y_values = measurements[image2_name]
+                    
+                    # Ensure same length
+                    min_len = min(len(x_values), len(y_values))
+                    x_values = x_values[:min_len]
+                    y_values = y_values[:min_len]
+
+                    all_measurements.append({
+                        "image1_name": image1_name,
+                        "image2_name": image2_name,
+                        "mask_name": mask_name,
+                        "x_values": x_values,
+                        "y_values": y_values
+                    })
+
+                if not all_measurements:
+                    QMessageBox.critical(self, "Joint KDE Plot", "Failed to calculate measurements for any of the selected sets.")
+                    return
+
+                graph_dir = os.path.join(self.working_dir, "Graphs")
+                filename = kde_plots.create_joint_kde_plot(all_measurements, graph_dir)
+
+                if filename:
+                    self.statusBar().showMessage("Joint KDE Plot completed.", 3000)
+                    self._update_graph_list()
+                    # Select the newly created graph
+                    items = self.graph_list.findItems(filename, Qt.MatchExactly)
+                    if items:
+                        self.graph_list.clearSelection()
+                        items[0].setSelected(True)
+                    self._show_graphs_window()
+                else:
+                    QMessageBox.warning(self, "Joint KDE Plot", "Could not create plot.")
+
+            except Exception as e:
+                QMessageBox.critical(self, "Joint KDE Plot Error", f"An error occurred: {str(e)}")
+            finally:
+                QApplication.restoreOverrideCursor()
 
     def _show_graphs_window(self):
         if self.graphs_window is None or not self.graphs_window.isVisible():
@@ -495,6 +584,12 @@ class MainWindow(QMainWindow):
             if os.path.exists(graph_path):
                 label = QLabel()
                 pixmap = QPixmap(graph_path)
+                
+                # Rescale jointplots as they can be larger
+                if selected_graphs[0].text().startswith("JointPlot_"):
+                    # Scale to a reasonable size if needed, but for now just show
+                    pass
+                
                 label.setPixmap(pixmap)
                 self.graphs_layout.addWidget(label)
         else:
@@ -534,7 +629,7 @@ class MainWindow(QMainWindow):
                             if found: break
             
             if items_measurements:
-                combined_rgb = graphing.create_dynamic_overlaid_histogram(items_measurements)
+                combined_rgb = histogram_plots.create_dynamic_overlaid_histogram(items_measurements)
                 if combined_rgb is not None:
                     # Ensure the array is C-contiguous for QImage
                     combined_rgb = np.ascontiguousarray(combined_rgb)
@@ -578,7 +673,7 @@ class MainWindow(QMainWindow):
                                         break
                 
             if items_measurements:
-                graphing.create_dynamic_overlaid_histogram(items_measurements, output_path=path)
+                histogram_plots.create_dynamic_overlaid_histogram(items_measurements, output_path=path)
                 QMessageBox.information(self, "Save", f"Combined histogram saved to {path}")
 
     def _export_selected_graphs(self):

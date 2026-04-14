@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QDoubleSpinBox, QSpinBox, 
     QDialogButtonBox, QComboBox, QCheckBox, QLabel, QListWidget, 
-    QPushButton, QListWidgetItem, QMessageBox
+    QPushButton, QListWidgetItem, QMessageBox, QWidget
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
@@ -340,4 +340,84 @@ class ThresholdParameterDialog(QDialog):
             "threshold": self.threshold_spin.value(),
             "normalize": self.normalize_check.isChecked()
         }
+
+class JointPlotDialog(QDialog):
+    def __init__(self, masks, images, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Joint KDE Plot Selection")
+        self.masks = masks
+        self.images = images
+        self.selections = []
+        self.setup_ui()
+
+    def setup_ui(self):
+        self.main_layout = QVBoxLayout(self)
+        
+        self.sets_container = QVBoxLayout()
+        self.main_layout.addLayout(self.sets_container)
+        
+        # Add the first set by default
+        self._add_selection_set()
+        
+        self.add_set_btn = QPushButton("Add Another Set (Max 3)")
+        self.add_set_btn.clicked.connect(self._add_selection_set)
+        self.main_layout.addWidget(self.add_set_btn)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._validate_and_accept)
+        buttons.rejected.connect(self.reject)
+        self.main_layout.addWidget(buttons)
+
+    def _add_selection_set(self):
+        if len(self.selections) >= 3:
+            QMessageBox.information(self, "Limit Reached", "You can only add up to 3 sets.")
+            return
+
+        group_box = QWidget()
+        group_layout = QFormLayout(group_box)
+        
+        set_num = len(self.selections) + 1
+        group_layout.addRow(QLabel(f"<b>Set {set_num}</b>"), QLabel(""))
+
+        mask_combo = QComboBox()
+        mask_combo.addItems(self.masks)
+        group_layout.addRow("Select Mask:", mask_combo)
+
+        image1_combo = QComboBox()
+        image1_combo.addItems(self.images)
+        group_layout.addRow("Select Image 1 (X-axis):", image1_combo)
+
+        image2_combo = QComboBox()
+        image2_combo.addItems(self.images)
+        if len(self.images) > 1:
+            image2_combo.setCurrentIndex(1)
+        group_layout.addRow("Select Image 2 (Y-axis):", image2_combo)
+
+        self.sets_container.addWidget(group_box)
+        self.selections.append({
+            "widget": group_box,
+            "mask": mask_combo,
+            "image1": image1_combo,
+            "image2": image2_combo
+        })
+        
+        if len(self.selections) >= 3:
+            self.add_set_btn.setEnabled(False)
+
+    def _validate_and_accept(self):
+        for i, sel in enumerate(self.selections):
+            if sel["image1"].currentText() == sel["image2"].currentText():
+                QMessageBox.warning(self, "Invalid Selection", f"Set {i+1}: Please select two different images.")
+                return
+        self.accept()
+
+    def get_selections(self):
+        results = []
+        for sel in self.selections:
+            results.append({
+                "mask": sel["mask"].currentText(),
+                "image1": sel["image1"].currentText(),
+                "image2": sel["image2"].currentText()
+            })
+        return results
 

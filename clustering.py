@@ -39,7 +39,7 @@ def _apply_normalization(stack, normalize_stack=False, normalize=False):
                 stack[i] = np.zeros_like(img)
     return stack
 
-def kmeans_clustering(stack, n_clusters=8, max_iter=300, init='k-means++', n_init=10, random_state=None, algorithm='auto', normalize=False, tol=1e-4, normalize_stack=False, mask=None):
+def kmeans_clustering(stack, n_clusters=8, max_iter=300, init='k-means++', n_init=10, random_state=None, algorithm='auto', normalize=False, tol=1e-4, normalize_stack=False, mask=None, border_mask_width=6):
     """
     Perform k-means clustering on an image stack.
     
@@ -55,6 +55,7 @@ def kmeans_clustering(stack, n_clusters=8, max_iter=300, init='k-means++', n_ini
         tol (float): Relative tolerance with regards to Frobenius norm of the difference in the cluster centers.
         normalize_stack (bool): Whether to normalize the entire stack as a single block.
         mask (np.ndarray or None): Optional binary mask (H, W) to constrain clustering to only non-zero pixels.
+        border_mask_width (int): Number of pixels to exclude from the edges.
         
     Returns:
         np.ndarray: Cluster labels as an image of shape (H, W).
@@ -63,6 +64,23 @@ def kmeans_clustering(stack, n_clusters=8, max_iter=300, init='k-means++', n_ini
         raise ValueError("Stack must be (N, H, W) numpy array.")
     
     n_images, height, width = stack.shape
+
+    # Apply border mask
+    if border_mask_width > 0:
+        border_mask = np.ones((height, width), dtype=np.uint8)
+        bw = border_mask_width
+        if height > 2 * bw and width > 2 * bw:
+            border_mask[:bw, :] = 0
+            border_mask[-bw:, :] = 0
+            border_mask[:, :bw] = 0
+            border_mask[:, -bw:] = 0
+            
+            if mask is not None:
+                if len(mask.shape) == 3:
+                    mask = np.max(mask, axis=2)
+                mask = mask * border_mask
+            else:
+                mask = border_mask
 
     stack = _apply_normalization(stack, normalize_stack, normalize)
     
@@ -113,7 +131,7 @@ def kmeans_clustering(stack, n_clusters=8, max_iter=300, init='k-means++', n_ini
     
     return cluster_mask
 
-def gaussian_mixture_clustering(stack, n_components=8, covariance_type='full', tol=1e-3, max_iter=100, random_state=None, normalize=False, normalize_stack=False, mask=None):
+def gaussian_mixture_clustering(stack, n_components=8, covariance_type='full', tol=1e-3, max_iter=100, random_state=None, normalize=False, normalize_stack=False, mask=None, border_mask_width=6):
     """
     Perform Gaussian Mixture Model clustering on an image stack.
     
@@ -127,6 +145,7 @@ def gaussian_mixture_clustering(stack, n_components=8, covariance_type='full', t
         normalize (bool): Whether to normalize each image in the stack individually.
         normalize_stack (bool): Whether to normalize the entire stack as a single block.
         mask (np.ndarray or None): Optional binary mask (H, W) to constrain clustering to only non-zero pixels.
+        border_mask_width (int): Number of pixels to exclude from the edges.
         
     Returns:
         np.ndarray: Cluster labels as an image of shape (H, W).
@@ -135,6 +154,23 @@ def gaussian_mixture_clustering(stack, n_components=8, covariance_type='full', t
         raise ValueError("Stack must be (N, H, W) numpy array.")
     
     n_images, height, width = stack.shape
+
+    # Apply border mask
+    if border_mask_width > 0:
+        border_mask = np.ones((height, width), dtype=np.uint8)
+        bw = border_mask_width
+        if height > 2 * bw and width > 2 * bw:
+            border_mask[:bw, :] = 0
+            border_mask[-bw:, :] = 0
+            border_mask[:, :bw] = 0
+            border_mask[:, -bw:] = 0
+            
+            if mask is not None:
+                if len(mask.shape) == 3:
+                    mask = np.max(mask, axis=2)
+                mask = mask * border_mask
+            else:
+                mask = border_mask
 
     stack = _apply_normalization(stack, normalize_stack, normalize)
     
@@ -177,7 +213,7 @@ def gaussian_mixture_clustering(stack, n_components=8, covariance_type='full', t
     
     return cluster_mask
 
-def isodata_clustering(stack, n_clusters=8, max_iter=100, min_samples=20, max_std_dev=0.1, min_cluster_distance=0.1, max_merge_pairs=2, random_state=None, normalize=False, normalize_stack=False, mask=None):
+def isodata_clustering(stack, n_clusters=8, max_iter=100, min_samples=20, max_std_dev=0.1, min_cluster_distance=0.1, max_merge_pairs=2, random_state=None, normalize=False, normalize_stack=False, mask=None, border_mask_width=6):
     """
     Perform ISODATA clustering on an image stack.
     
@@ -193,6 +229,7 @@ def isodata_clustering(stack, n_clusters=8, max_iter=100, min_samples=20, max_st
         normalize (bool): Normalize per image.
         normalize_stack (bool): Normalize entire stack.
         mask (np.ndarray or None): Optional binary mask.
+        border_mask_width (int): Number of pixels to exclude from the edges.
         
     Returns:
         np.ndarray: Cluster labels (H, W).
@@ -201,6 +238,24 @@ def isodata_clustering(stack, n_clusters=8, max_iter=100, min_samples=20, max_st
         raise ValueError("Stack must be (N, H, W) numpy array.")
     
     n_images, height, width = stack.shape
+
+    # Apply border mask
+    if border_mask_width > 0:
+        border_mask = np.ones((height, width), dtype=np.uint8)
+        bw = border_mask_width
+        if height > 2 * bw and width > 2 * bw:
+            border_mask[:bw, :] = 0
+            border_mask[-bw:, :] = 0
+            border_mask[:, :bw] = 0
+            border_mask[:, -bw:] = 0
+            
+            if mask is not None:
+                if len(mask.shape) == 3:
+                    mask = np.max(mask, axis=2)
+                mask = mask * border_mask
+            else:
+                mask = border_mask
+
     stack = _apply_normalization(stack, normalize_stack, normalize)
     data = stack.transpose(1, 2, 0).reshape(-1, n_images)
     
