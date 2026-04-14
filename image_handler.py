@@ -1,7 +1,8 @@
 import numpy as np
+import qimage2ndarray
 from PySide6.QtGui import QImage
 import os
-from PIL import Image
+import cv2
 import json
 
 class ImageDisplayHandler:
@@ -113,30 +114,23 @@ class ImageDisplayHandler:
         composite_rgb = np.clip(composite_rgb, 0, 1)
 
         display_img = np.ascontiguousarray((composite_rgb * 255).astype(np.uint8))
-        height, width, _ = display_img.shape
-        qimg = QImage(display_img.data, width, height, display_img.strides[0], QImage.Format_RGB888)
-        qimg.ndarray = display_img
-        return qimg.copy()
+        return qimage2ndarray.array2qimage(display_img).copy()
 
     def save_visible(self, asset_manager, output_dir, filename, image_format):
         composite_qimg = self.render_composite(asset_manager)
         if not composite_qimg:
             return False
             
-        # Convert QImage to PIL and save
-        width = composite_qimg.width()
-        height = composite_qimg.height()
-        
-        ptr = composite_qimg.constBits()
-        # For RGB888, bytes_per_pixel is 3
-        # PIL.Image.frombuffer('RGB', (width, height), data, 'raw', 'RGB', 0, 1)
-        # But wait, we have display_img already in render_composite? 
-        # Actually it's simpler if we just use the QImage's save method.
-        # But let's use PIL to have more control over metadata or other formats.
-        
-        # It's better to just call qimg.save() if we want simple formats.
-        # For more complex stuff, we'd need to convert.
-        
-        # Let's use QImage.save for simplicity
         save_path = os.path.join(output_dir, f"{filename}.{image_format}")
+        
+        # Use OpenCV to save for consistency
+        if hasattr(composite_qimg, 'ndarray'):
+            data = composite_qimg.ndarray
+            # data is RGB, OpenCV wants BGR
+            if len(data.shape) == 3 and data.shape[2] == 3:
+                data = cv2.cvtColor(data, cv2.COLOR_RGB2BGR)
+            elif len(data.shape) == 3 and data.shape[2] == 4:
+                data = cv2.cvtColor(data, cv2.COLOR_RGBA2BGRA)
+            return cv2.imwrite(save_path, data)
+        
         return composite_qimg.save(save_path)

@@ -2,6 +2,7 @@ import os
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
+import cv2
 
 def create_histograms(measurements, mask_name, output_dir):
     """
@@ -160,4 +161,5 @@ def create_dynamic_overlaid_histogram(items_measurements, title="Combined Histog
     rgb = rgba[:, :, :3]
     
     plt.close()
+
     return rgb

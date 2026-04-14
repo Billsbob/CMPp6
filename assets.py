@@ -2,7 +2,8 @@ import os
 import numpy as np
 import json
 import image_manipulation
-from PIL import Image, ImageFilter
+import cv2
+import qimage2ndarray
 from PySide6.QtGui import QImage, QPixmap
 
 class TransformPipeline:
@@ -65,9 +66,9 @@ class TransformPipeline:
             )
         
         if "sharpen" in self.config.get("filters", []):
-            img = Image.fromarray(processed)
-            img = img.filter(ImageFilter.SHARPEN)
-            processed = np.array(img).astype(data.dtype)
+            # Use OpenCV for sharpening
+            kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+            processed = cv2.filter2D(processed, -1, kernel)
 
         if self.config.get("invert", False):
             d_min, d_max = processed.min(), processed.max()
@@ -136,10 +137,20 @@ class Asset:
         if not os.path.exists(self.path):
             return None
         
-        with Image.open(self.path) as img:
-            if img.mode in ['RGB', 'RGBA', 'P']:
-                img = img.convert('F')
-            self._data = np.array(img)
+        # Use OpenCV to load images, including high bit depth
+        # IMREAD_UNCHANGED keeps bit depth and channels
+        data = cv2.imread(self.path, cv2.IMREAD_UNCHANGED)
+        if data is None:
+            return None
+
+        # Convert to float32 for processing
+        if data.dtype == np.uint8:
+            self._data = data.astype(np.float32)
+        elif data.dtype == np.uint16:
+            self._data = data.astype(np.float32)
+        else:
+            self._data = data.astype(np.float32)
+            
         return self._data
 
     def get_rendered_data(self, data_only=False):
@@ -151,7 +162,8 @@ class Asset:
         else:
             data = self.data
 
-        if data.max() <= 1.01:
+        # Normalize data to 0-255 for display if needed
+        if data.max() <= 1.01 and data.min() >= -0.01:
             display_data = (data * 255).astype(np.uint8)
         else:
             d_min, d_max = data.min(), data.max()
@@ -162,26 +174,8 @@ class Asset:
         
         display_data = np.ascontiguousarray(display_data)
         
-        if len(display_data.shape) == 2:
-            height, width = display_data.shape
-            format = QImage.Format_Grayscale8
-        elif len(display_data.shape) == 3:
-            height, width, channels = display_data.shape
-            if channels == 3:
-                format = QImage.Format_RGB888
-            elif channels == 4:
-                format = QImage.Format_RGBA8888
-            else:
-                display_data = np.ascontiguousarray(display_data[:, :, 0])
-                height, width = display_data.shape
-                format = QImage.Format_Grayscale8
-        else:
-            height, width = display_data.shape[:2]
-            format = QImage.Format_Grayscale8
-
-        qimg = QImage(display_data.data, width, height, display_data.strides[0], format)
-        qimg.ndarray = display_data
-        return qimg.copy()
+        # Use qimage2ndarray to handle the conversion safely
+        return qimage2ndarray.array2qimage(display_data).copy()
 
 class AssetManager:
     def __init__(self):

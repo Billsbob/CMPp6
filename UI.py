@@ -9,8 +9,9 @@ from PySide6.QtGui import QAction, QPixmap, QPainter, QPalette, QPen, QColor, QB
 from PySide6.QtCore import Qt, QSize, QPoint, QPointF, QRectF, Signal, QObject, QThread
 import os
 import numpy as np
-from PIL import Image
+import cv2
 import json
+import qimage2ndarray
 from assets import AssetManager
 from image_handler import ImageDisplayHandler
 import image_stacker
@@ -305,7 +306,7 @@ class MainWindow(QMainWindow):
         create_jointplot_action = QAction("Create Jointplot", self)
         create_jointplot_action.triggered.connect(self._create_jointplot)
         analyze_menu.addAction(create_jointplot_action)
-
+        
     def _home_triggered(self):
         directory = QFileDialog.getExistingDirectory(self, "Select Working Directory")
         if directory:
@@ -1042,6 +1043,7 @@ class MainWindow(QMainWindow):
             
             max_proj = np.max(temp_stack, axis=0)
             self.preview_mask = (max_proj > params["threshold"]).astype(np.uint8)
+            
             self.cached_composite = None
             self._refresh_viewer()
 
@@ -1318,9 +1320,15 @@ class MainWindow(QMainWindow):
         
         for name, asset in self.asset_manager.images.items():
             data = asset.get_rendered_data()
-            if data.max() <= 1.01: data = (data * 255).astype(np.uint8)
-            else: data = data.astype(np.uint8)
-            Image.fromarray(data).save(os.path.join(out_dir, name))
+            if data.max() <= 1.01: 
+                data = (data * 255).astype(np.uint8)
+            else: 
+                data = data.astype(np.uint8)
+            
+            # Use OpenCV to save
+            if len(data.shape) == 3 and data.shape[2] == 3:
+                data = cv2.cvtColor(data, cv2.COLOR_RGB2BGR)
+            cv2.imwrite(os.path.join(out_dir, name), data)
         QMessageBox.information(self, "Export", "Images exported successfully.")
 
     def _stack_images(self):
@@ -1507,7 +1515,6 @@ class MainWindow(QMainWindow):
             if (self.visible_masks and self.working_dir) or self.preview_mask is not None:
                 if self.cached_composite is None:
                     # If no images, we need a blank slate based on mask size
-                    # But we don't know the size yet. Let's load first mask to see.
                     if self.preview_mask is not None:
                         h, w = self.preview_mask.shape
                     else:
@@ -1517,26 +1524,17 @@ class MainWindow(QMainWindow):
                             h, w = m.shape
                         else:
                             return
-                    composite_rgba = np.zeros((h, w, 4), dtype=np.float32)
-                    composite_rgba[:, :, 3] = 1.0 # Set alpha to 1.0 for blank slate
+                    composite_rgb = np.zeros((h, w, 3), dtype=np.uint8)
                 else:
-                    # Convert QImage to numpy RGBA
-                    qimg = self.cached_composite.convertToFormat(QImage.Format_RGBA8888)
-                    width = qimg.width()
-                    height = qimg.height()
-                    ptr = qimg.constBits()
-                    # QImage format RGBA8888 is 4 bytes per pixel
-                    arr = np.array(ptr).reshape(height, width, 4).astype(np.float32) / 255.0
-                    composite_rgba = arr
+                    # Use qimage2ndarray to convert QImage to numpy RGB safely
+                    composite_rgb = qimage2ndarray.rgb_view(self.cached_composite).copy()
 
                 if self.visible_masks and self.working_dir:
                     for mask_name in sorted(self.visible_masks):
                         mask_path = os.path.join(self.working_dir, "Cluster Masks", mask_name)
                         if os.path.exists(mask_path):
                             mask = np.load(mask_path)
-                            # We need to make sure mask size matches composite size
-                            if mask.shape != composite_rgba.shape[:2]:
-                                # Optionally resize mask here? For now assume matching.
+                            if mask.shape != composite_rgb.shape[:2]:
                                 continue
                             
                             # Generate a color for the mask
@@ -1544,39 +1542,36 @@ class MainWindow(QMainWindow):
                                 if mask_name.startswith("KC_"):
                                     idx = int(mask_name.split('_')[1].split('.')[0])
                                 elif mask_name.startswith("ThresholdMask_"):
-                                    idx = int(mask_name.split('_')[1].split('.')[0]) + 100 # Offset to avoid same colors
+                                    idx = int(mask_name.split('_')[1].split('.')[0]) + 100
                                 else:
                                     idx = hash(mask_name)
                             except:
                                 idx = hash(mask_name)
-                            color_hue = (idx * 137.5) % 360 # Golden angle for distinct colors
+                            color_hue = (idx * 137.5) % 360
                             color = QColor.fromHsvF(color_hue/360.0, 1.0, 1.0)
-                            r, g, b = color.redF(), color.greenF(), color.blueF()
+                            r, g, b = color.red(), color.green(), color.blue()
                             
-                            # Blend mask
+                            # Blend mask using OpenCV/NumPy
                             mask_bool = mask.astype(bool)
-                            composite_rgba[mask_bool, 0] = composite_rgba[mask_bool, 0] * (1 - self.mask_opacity) + r * self.mask_opacity
-                            composite_rgba[mask_bool, 1] = composite_rgba[mask_bool, 1] * (1 - self.mask_opacity) + g * self.mask_opacity
-                            composite_rgba[mask_bool, 2] = composite_rgba[mask_bool, 2] * (1 - self.mask_opacity) + b * self.mask_opacity
+                            overlay = composite_rgb.copy()
+                            overlay[mask_bool] = [r, g, b]
+                            cv2.addWeighted(overlay, self.mask_opacity, composite_rgb, 1 - self.mask_opacity, 0, composite_rgb)
 
                 if self.preview_mask is not None:
                     mask = self.preview_mask
-                    if mask.shape == composite_rgba.shape[:2]:
-                        r, g, b = self.preview_color.redF(), self.preview_color.greenF(), self.preview_color.blueF()
+                    if mask.shape == composite_rgb.shape[:2]:
+                        r, g, b = self.preview_color.red(), self.preview_color.green(), self.preview_color.blue()
                         mask_bool = mask.astype(bool)
-                        # We can use a different opacity for preview or the same. 
-                        # Let's use 0.7 for higher visibility during adjustment
                         preview_opacity = 0.7
-                        composite_rgba[mask_bool, 0] = composite_rgba[mask_bool, 0] * (1 - preview_opacity) + r * preview_opacity
-                        composite_rgba[mask_bool, 1] = composite_rgba[mask_bool, 1] * (1 - preview_opacity) + g * preview_opacity
-                        composite_rgba[mask_bool, 2] = composite_rgba[mask_bool, 2] * (1 - preview_opacity) + b * preview_opacity
+                        overlay = composite_rgb.copy()
+                        overlay[mask_bool] = [r, g, b]
+                        cv2.addWeighted(overlay, preview_opacity, composite_rgb, 1 - preview_opacity, 0, composite_rgb)
                 
                 # Convert back to QImage
-                display_img = (composite_rgba * 255).astype(np.uint8)
-                h, w, _ = display_img.shape
-                self.cached_composite = QImage(display_img.data, w, h, display_img.strides[0], QImage.Format_RGBA8888).copy()
+                self.cached_composite = qimage2ndarray.array2qimage(composite_rgb).copy()
 
         self.viewer_view.set_pixmap(self.cached_composite)
+        
         self.bg_label.lower()
 
     def _create_status_bar(self):

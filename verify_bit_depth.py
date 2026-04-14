@@ -1,5 +1,7 @@
+import os
+os.environ['QT_API'] = 'pyside6'
 import numpy as np
-from PIL import Image
+import cv2
 import os
 from assets import Asset, TransformPipeline
 import clustering
@@ -7,19 +9,17 @@ import clustering
 def create_test_images():
     # 1. 16-bit TIFF image (grayscale)
     data_16 = np.linspace(0, 65535, 100*100, dtype=np.uint16).reshape((100, 100))
-    img_16 = Image.fromarray(data_16)
-    img_16.save("test_16bit.tif")
+    cv2.imwrite("test_16bit.tif", data_16)
     
     # 2. 32-bit float TIFF image (grayscale)
     data_32f = np.linspace(0.0, 1.0, 100*100, dtype=np.float32).reshape((100, 100))
-    img_32f = Image.fromarray(data_32f)
-    img_32f.save("test_32f.tif")
+    cv2.imwrite("test_32f.tif", data_32f)
     
     # 3. 8-bit RGB image (should be converted to grayscale, but what about others?)
     data_rgb = np.zeros((100, 100, 3), dtype=np.uint8)
-    data_rgb[:, :, 0] = 100
-    img_rgb = Image.fromarray(data_rgb)
-    img_rgb.save("test_rgb.png")
+    data_rgb[:, :, 2] = 100 # Red channel in BGR is 2? Wait, OpenCV is BGR. 
+    # Let's just set one channel.
+    cv2.imwrite("test_rgb.png", data_rgb)
 
 def test_bit_depth_preservation():
     create_test_images()

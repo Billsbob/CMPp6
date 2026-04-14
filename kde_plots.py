@@ -2,6 +2,7 @@ import os
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
+import cv2
 
 def create_joint_kde_plot(all_measurements, output_dir):
     """
@@ -94,6 +95,7 @@ def create_joint_kde_plot(all_measurements, output_dir):
 
     path = os.path.join(output_dir, filename)
     g.savefig(path)
+    
     plt.close()
     
     return filename
