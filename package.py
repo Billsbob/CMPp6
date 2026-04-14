@@ -18,7 +18,7 @@ added_data = [
 args = [
     entry_point,
     '--name=%s' % exe_name,
-    '--onefile',         # Create a single executable file
+    '--onedir',          # Create a single folder with the executable and its dependencies
     '--windowed',        # Do not open a console window (GUI app)
     '--clean',           # Clean PyInstaller cache and temporary files before building
     '--noconfirm',       # Replace output directory without asking
@@ -107,22 +107,30 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='{exe_name}',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='{exe_name}',
 )
 """
     spec_filename = f"{exe_name}.spec"
