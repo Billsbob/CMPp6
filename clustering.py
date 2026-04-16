@@ -1,6 +1,7 @@
 import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
+import coordinate_features
 
 def _apply_normalization(stack, normalize_stack=False, normalize=False):
     """
@@ -39,7 +40,7 @@ def _apply_normalization(stack, normalize_stack=False, normalize=False):
                 stack[i] = np.zeros_like(img)
     return stack
 
-def kmeans_clustering(stack, n_clusters=8, max_iter=300, init='k-means++', n_init=10, random_state=None, algorithm='auto', normalize=False, tol=1e-4, normalize_stack=False, mask=None, border_mask_width=6):
+def kmeans_clustering(stack, n_clusters=8, max_iter=300, init='k-means++', n_init=10, random_state=None, algorithm='auto', normalize=False, tol=1e-4, normalize_stack=False, mask=None, border_mask_width=6, include_coords=False, x_weight=1.0, y_weight=1.0):
     """
     Perform k-means clustering on an image stack.
     
@@ -56,6 +57,9 @@ def kmeans_clustering(stack, n_clusters=8, max_iter=300, init='k-means++', n_ini
         normalize_stack (bool): Whether to normalize the entire stack as a single block.
         mask (np.ndarray or None): Optional binary mask (H, W) to constrain clustering to only non-zero pixels.
         border_mask_width (int): Number of pixels to exclude from the edges.
+        include_coords (bool): Whether to include X/Y coordinates as features.
+        x_weight (float): Weight factor for X coordinates.
+        y_weight (float): Weight factor for Y coordinates.
         
     Returns:
         np.ndarray: Cluster labels as an image of shape (H, W).
@@ -87,6 +91,9 @@ def kmeans_clustering(stack, n_clusters=8, max_iter=300, init='k-means++', n_ini
     # Reshape stack to (H*W, N) so each pixel is a sample with N features
     # stack is (N, H, W), we want (H, W, N) then (H*W, N)
     data = stack.transpose(1, 2, 0).reshape(-1, n_images)
+
+    if include_coords:
+        data = coordinate_features.add_coordinate_features(data, height, width, x_weight=x_weight, y_weight=y_weight)
     
     if mask is not None:
         if len(mask.shape) == 3:
@@ -131,7 +138,7 @@ def kmeans_clustering(stack, n_clusters=8, max_iter=300, init='k-means++', n_ini
     
     return cluster_mask
 
-def gaussian_mixture_clustering(stack, n_components=8, covariance_type='full', tol=1e-3, max_iter=100, random_state=None, normalize=False, normalize_stack=False, mask=None, border_mask_width=6):
+def gaussian_mixture_clustering(stack, n_components=8, covariance_type='full', tol=1e-3, max_iter=100, random_state=None, normalize=False, normalize_stack=False, mask=None, border_mask_width=6, include_coords=False, x_weight=1.0, y_weight=1.0):
     """
     Perform Gaussian Mixture Model clustering on an image stack.
     
@@ -146,6 +153,9 @@ def gaussian_mixture_clustering(stack, n_components=8, covariance_type='full', t
         normalize_stack (bool): Whether to normalize the entire stack as a single block.
         mask (np.ndarray or None): Optional binary mask (H, W) to constrain clustering to only non-zero pixels.
         border_mask_width (int): Number of pixels to exclude from the edges.
+        include_coords (bool): Whether to include X/Y coordinates as features.
+        x_weight (float): Weight factor for X coordinates.
+        y_weight (float): Weight factor for Y coordinates.
         
     Returns:
         np.ndarray: Cluster labels as an image of shape (H, W).
@@ -176,6 +186,9 @@ def gaussian_mixture_clustering(stack, n_components=8, covariance_type='full', t
     
     # Reshape stack to (H*W, N)
     data = stack.transpose(1, 2, 0).reshape(-1, n_images)
+
+    if include_coords:
+        data = coordinate_features.add_coordinate_features(data, height, width, x_weight=x_weight, y_weight=y_weight)
     
     if mask is not None:
         if len(mask.shape) == 3:
@@ -213,7 +226,7 @@ def gaussian_mixture_clustering(stack, n_components=8, covariance_type='full', t
     
     return cluster_mask
 
-def isodata_clustering(stack, n_clusters=8, max_iter=100, min_samples=20, max_std_dev=0.1, min_cluster_distance=0.1, max_merge_pairs=2, random_state=None, normalize=False, normalize_stack=False, mask=None, border_mask_width=6):
+def isodata_clustering(stack, n_clusters=8, max_iter=100, min_samples=20, max_std_dev=0.1, min_cluster_distance=0.1, max_merge_pairs=2, random_state=None, normalize=False, normalize_stack=False, mask=None, border_mask_width=6, include_coords=False, x_weight=1.0, y_weight=1.0):
     """
     Perform ISODATA clustering on an image stack.
     
@@ -230,6 +243,9 @@ def isodata_clustering(stack, n_clusters=8, max_iter=100, min_samples=20, max_st
         normalize_stack (bool): Normalize entire stack.
         mask (np.ndarray or None): Optional binary mask.
         border_mask_width (int): Number of pixels to exclude from the edges.
+        include_coords (bool): Whether to include X/Y coordinates as features.
+        x_weight (float): Weight factor for X coordinates.
+        y_weight (float): Weight factor for Y coordinates.
         
     Returns:
         np.ndarray: Cluster labels (H, W).
@@ -258,6 +274,9 @@ def isodata_clustering(stack, n_clusters=8, max_iter=100, min_samples=20, max_st
 
     stack = _apply_normalization(stack, normalize_stack, normalize)
     data = stack.transpose(1, 2, 0).reshape(-1, n_images)
+
+    if include_coords:
+        data = coordinate_features.add_coordinate_features(data, height, width, x_weight=x_weight, y_weight=y_weight)
     
     if mask is not None:
         if len(mask.shape) == 3:

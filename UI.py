@@ -759,7 +759,7 @@ class MainWindow(QMainWindow):
             self._update_graph_list()
             self._show_graphs_window()
 
-    def _on_clustering_finished(self, cluster_mask, mask_root_name, n_clusters):
+    def _on_clustering_finished(self, cluster_mask, mask_root_name, n_clusters, stats_csv_path):
         try:
             mask_dir = os.path.join(self.working_dir, "Cluster Masks")
             os.makedirs(mask_dir, exist_ok=True)
@@ -773,8 +773,12 @@ class MainWindow(QMainWindow):
                     new_mask_name = f"{mask_root_name}_{i+1}.npy"
                 np.save(os.path.join(mask_dir, new_mask_name), mask)
 
-            self.statusBar().showMessage("Clustering completed.", 3000)
+            msg = "Clustering completed."
+            if stats_csv_path:
+                msg += f" Statistics saved to {os.path.basename(stats_csv_path)}."
+            self.statusBar().showMessage(msg, 5000)
             self._update_mask_list()
+            self._update_graph_list()
         except Exception as e:
             QMessageBox.critical(self, "Clustering Error", f"An error occurred while saving results: {str(e)}")
         finally:
@@ -850,8 +854,14 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("Running K-Means...")
                 QApplication.setOverrideCursor(Qt.WaitCursor)
                 
+                graph_dir = os.path.join(self.working_dir, "Graphs")
+                os.makedirs(graph_dir, exist_ok=True)
+
                 self.clustering_thread = QThread()
-                self.clustering_worker = ClusteringWorker("kmeans", stack, mask_to_use, params, mask_root_name)
+                self.clustering_worker = ClusteringWorker(
+                    "kmeans", stack, mask_to_use, params, mask_root_name, 
+                    image_names=image_names, output_dir=graph_dir
+                )
                 self.clustering_worker.moveToThread(self.clustering_thread)
                 
                 self.clustering_thread.started.connect(self.clustering_worker.run)
@@ -921,9 +931,15 @@ class MainWindow(QMainWindow):
             try:
                 self.statusBar().showMessage("Running Gaussian Mixture...")
                 QApplication.setOverrideCursor(Qt.WaitCursor)
+                
+                graph_dir = os.path.join(self.working_dir, "Graphs")
+                os.makedirs(graph_dir, exist_ok=True)
 
                 self.clustering_thread = QThread()
-                self.clustering_worker = ClusteringWorker("gmm", stack, mask_to_use, params, mask_root_name)
+                self.clustering_worker = ClusteringWorker(
+                    "gmm", stack, mask_to_use, params, mask_root_name,
+                    image_names=image_names, output_dir=graph_dir
+                )
                 self.clustering_worker.moveToThread(self.clustering_thread)
 
                 self.clustering_thread.started.connect(self.clustering_worker.run)
@@ -993,9 +1009,15 @@ class MainWindow(QMainWindow):
             try:
                 self.statusBar().showMessage("Running ISODATA...")
                 QApplication.setOverrideCursor(Qt.WaitCursor)
+                
+                graph_dir = os.path.join(self.working_dir, "Graphs")
+                os.makedirs(graph_dir, exist_ok=True)
 
                 self.clustering_thread = QThread()
-                self.clustering_worker = ClusteringWorker("isodata", stack, mask_to_use, params, mask_root_name)
+                self.clustering_worker = ClusteringWorker(
+                    "isodata", stack, mask_to_use, params, mask_root_name,
+                    image_names=image_names, output_dir=graph_dir
+                )
                 self.clustering_worker.moveToThread(self.clustering_thread)
 
                 self.clustering_thread.started.connect(self.clustering_worker.run)
@@ -1111,11 +1133,21 @@ class MainWindow(QMainWindow):
     def _show_mask_context_menu(self, position):
         item = self.mask_list.itemAt(position)
         if not item: return
+        name = item.text()
         
         menu = QMenu()
+        
+        # Color submenu
+        color_menu = menu.addMenu("Color")
+        for color_name in ["red", "green", "blue", "cyan", "magenta", "yellow", "white"]:
+            action = QAction(color_name.capitalize(), self)
+            action.triggered.connect(lambda checked=False, c=color_name: self._change_color(name, c, is_mask=True))
+            color_menu.addAction(action)
+
         rename_action = QAction("Rename", self)
         rename_action.triggered.connect(lambda: self._rename_item(item, "Cluster Masks", self.mask_list))
         menu.addAction(rename_action)
+        
         menu.exec(self.mask_list.mapToGlobal(position))
 
     def _show_graph_context_menu(self, position):
@@ -1242,6 +1274,12 @@ class MainWindow(QMainWindow):
 
 
     def _change_color(self, name, color_name, is_mask=False):
+        if is_mask:
+            self.image_handler.set_asset_color(name, color_name)
+            self.cached_composite = None
+            self._refresh_viewer()
+            return
+
         asset = self.asset_manager.get_image_by_name(name)
         if asset:
             asset.pipeline.config["color"] = color_name
@@ -1537,19 +1575,25 @@ class MainWindow(QMainWindow):
                             if mask.shape != composite_rgb.shape[:2]:
                                 continue
                             
-                            # Generate a color for the mask
-                            try:
-                                if mask_name.startswith("KC_"):
-                                    idx = int(mask_name.split('_')[1].split('.')[0])
-                                elif mask_name.startswith("ThresholdMask_"):
-                                    idx = int(mask_name.split('_')[1].split('.')[0]) + 100
-                                else:
+                            # Generate a color for the mask or use the selected one
+                            color_name = self.image_handler.get_asset_color(mask_name)
+                            if color_name != "grayscale":
+                                # Use defined colors from ImageDisplayHandler
+                                rgb = self.image_handler.COLORS.get(color_name, (1, 1, 1))
+                                r, g, b = int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255)
+                            else:
+                                try:
+                                    if mask_name.startswith("KC_"):
+                                        idx = int(mask_name.split('_')[1].split('.')[0])
+                                    elif mask_name.startswith("ThresholdMask_"):
+                                        idx = int(mask_name.split('_')[1].split('.')[0]) + 100
+                                    else:
+                                        idx = hash(mask_name)
+                                except:
                                     idx = hash(mask_name)
-                            except:
-                                idx = hash(mask_name)
-                            color_hue = (idx * 137.5) % 360
-                            color = QColor.fromHsvF(color_hue/360.0, 1.0, 1.0)
-                            r, g, b = color.red(), color.green(), color.blue()
+                                color_hue = (idx * 137.5) % 360
+                                color = QColor.fromHsvF(color_hue/360.0, 1.0, 1.0)
+                                r, g, b = color.red(), color.green(), color.blue()
                             
                             # Blend mask using OpenCV/NumPy
                             mask_bool = mask.astype(bool)

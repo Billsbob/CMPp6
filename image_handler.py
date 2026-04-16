@@ -14,6 +14,7 @@ class ImageDisplayHandler:
         "cyan": (0, 1, 1),
         "magenta": (1, 0, 1),
         "yellow": (1, 1, 0),
+        "white": (1, 1, 1),
     }
 
     def __init__(self):

@@ -74,7 +74,10 @@ class ClusterParameterDialog(QDialog):
             "normalize": False,
             "normalize_stack": False,
             "tol": 1e-4,
-            "cluster_under_mask": False
+            "cluster_under_mask": False,
+            "include_coords": False,
+            "x_weight": 1.0,
+            "y_weight": 1.0
         }
         self.setup_ui()
 
@@ -125,6 +128,22 @@ class ClusterParameterDialog(QDialog):
         self.cluster_under_mask_check.setChecked(self.params["cluster_under_mask"])
         form_layout.addRow("Cluster only under selection:", self.cluster_under_mask_check)
 
+        self.include_coords_check = QCheckBox()
+        self.include_coords_check.setChecked(self.params["include_coords"])
+        form_layout.addRow("Include Coordinates:", self.include_coords_check)
+
+        self.x_weight_spin = QDoubleSpinBox()
+        self.x_weight_spin.setRange(0.0, 100.0)
+        self.x_weight_spin.setSingleStep(0.1)
+        self.x_weight_spin.setValue(self.params["x_weight"])
+        form_layout.addRow("X Weight:", self.x_weight_spin)
+
+        self.y_weight_spin = QDoubleSpinBox()
+        self.y_weight_spin.setRange(0.0, 100.0)
+        self.y_weight_spin.setSingleStep(0.1)
+        self.y_weight_spin.setValue(self.params["y_weight"])
+        form_layout.addRow("Y Weight:", self.y_weight_spin)
+
         layout.addLayout(form_layout)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -141,7 +160,10 @@ class ClusterParameterDialog(QDialog):
             "algorithm": self.algorithm_combo.currentText(),
             "normalize": self.normalize_check.isChecked(),
             "normalize_stack": self.normalize_stack_check.isChecked(),
-            "cluster_under_mask": self.cluster_under_mask_check.isChecked()
+            "cluster_under_mask": self.cluster_under_mask_check.isChecked(),
+            "include_coords": self.include_coords_check.isChecked(),
+            "x_weight": self.x_weight_spin.value(),
+            "y_weight": self.y_weight_spin.value()
         }
 
 class ISODATAParameterDialog(QDialog):
@@ -157,7 +179,10 @@ class ISODATAParameterDialog(QDialog):
             "random_state": 0,
             "normalize": False,
             "normalize_stack": False,
-            "cluster_under_mask": False
+            "cluster_under_mask": False,
+            "include_coords": False,
+            "x_weight": 1.0,
+            "y_weight": 1.0
         }
         self.setup_ui()
 
@@ -213,6 +238,22 @@ class ISODATAParameterDialog(QDialog):
         self.cluster_under_mask_check.setChecked(self.params["cluster_under_mask"])
         form_layout.addRow("Cluster only under selection:", self.cluster_under_mask_check)
 
+        self.include_coords_check = QCheckBox()
+        self.include_coords_check.setChecked(self.params["include_coords"])
+        form_layout.addRow("Include Coordinates:", self.include_coords_check)
+
+        self.x_weight_spin = QDoubleSpinBox()
+        self.x_weight_spin.setRange(0.0, 100.0)
+        self.x_weight_spin.setSingleStep(0.1)
+        self.x_weight_spin.setValue(self.params["x_weight"])
+        form_layout.addRow("X Weight:", self.x_weight_spin)
+
+        self.y_weight_spin = QDoubleSpinBox()
+        self.y_weight_spin.setRange(0.0, 100.0)
+        self.y_weight_spin.setSingleStep(0.1)
+        self.y_weight_spin.setValue(self.params["y_weight"])
+        form_layout.addRow("Y Weight:", self.y_weight_spin)
+
         layout.addLayout(form_layout)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -230,7 +271,10 @@ class ISODATAParameterDialog(QDialog):
             "random_state": self.random_state_spin.value(),
             "normalize": self.normalize_check.isChecked(),
             "normalize_stack": self.normalize_stack_check.isChecked(),
-            "cluster_under_mask": self.cluster_under_mask_check.isChecked()
+            "cluster_under_mask": self.cluster_under_mask_check.isChecked(),
+            "include_coords": self.include_coords_check.isChecked(),
+            "x_weight": self.x_weight_spin.value(),
+            "y_weight": self.y_weight_spin.value()
         }
 
 class GMMParameterDialog(QDialog):
@@ -244,7 +288,10 @@ class GMMParameterDialog(QDialog):
             "random_state": 0,
             "normalize": False,
             "normalize_stack": False,
-            "cluster_under_mask": False
+            "cluster_under_mask": False,
+            "include_coords": False,
+            "x_weight": 1.0,
+            "y_weight": 1.0
         }
         self.setup_ui()
 
@@ -285,6 +332,22 @@ class GMMParameterDialog(QDialog):
         self.cluster_under_mask_check.setChecked(self.params["cluster_under_mask"])
         form_layout.addRow("Cluster only under selection:", self.cluster_under_mask_check)
 
+        self.include_coords_check = QCheckBox()
+        self.include_coords_check.setChecked(self.params["include_coords"])
+        form_layout.addRow("Include Coordinates:", self.include_coords_check)
+
+        self.x_weight_spin = QDoubleSpinBox()
+        self.x_weight_spin.setRange(0.0, 100.0)
+        self.x_weight_spin.setSingleStep(0.1)
+        self.x_weight_spin.setValue(self.params["x_weight"])
+        form_layout.addRow("X Weight:", self.x_weight_spin)
+
+        self.y_weight_spin = QDoubleSpinBox()
+        self.y_weight_spin.setRange(0.0, 100.0)
+        self.y_weight_spin.setSingleStep(0.1)
+        self.y_weight_spin.setValue(self.params["y_weight"])
+        form_layout.addRow("Y Weight:", self.y_weight_spin)
+
         layout.addLayout(form_layout)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -299,7 +362,10 @@ class GMMParameterDialog(QDialog):
             "random_state": self.random_state_spin.value(),
             "normalize": self.normalize_check.isChecked(),
             "normalize_stack": self.normalize_stack_check.isChecked(),
-            "cluster_under_mask": self.cluster_under_mask_check.isChecked()
+            "cluster_under_mask": self.cluster_under_mask_check.isChecked(),
+            "include_coords": self.include_coords_check.isChecked(),
+            "x_weight": self.x_weight_spin.value(),
+            "y_weight": self.y_weight_spin.value()
         }
 
 class ThresholdParameterDialog(QDialog):
