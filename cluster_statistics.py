@@ -1,7 +1,71 @@
 import numpy as np
 import pandas as pd
 import os
-from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
+from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score, silhouette_samples
+
+def calculate_scores(data, labels, metrics_to_calculate=None):
+    """
+    Calculate specific clustering evaluation metrics.
+    
+    Args:
+        data (np.ndarray): Data (N_samples, N_features)
+        labels (np.ndarray): Labels (N_samples,)
+        metrics_to_calculate (list of str, optional): List of metrics to calculate.
+            Options: 'Silhouette Score', 'Davies-Bouldin Index', 'Calinski-Harabasz Index', 'Silhouette Score (Cluster)'
+            If None, all are calculated.
+            
+    Returns:
+        dict: Dictionary of metric names and their values.
+    """
+    if metrics_to_calculate is None:
+        metrics_to_calculate = ['Silhouette Score', 'Davies-Bouldin Index', 'Calinski-Harabasz Index', 'Silhouette Score (Cluster)']
+        
+    scores = {}
+    unique_labels = np.unique(labels)
+    
+    if len(unique_labels) <= 1:
+        for metric in metrics_to_calculate:
+            scores[metric] = np.nan
+        return scores
+
+    # Silhouette calculation with sampling
+    if 'Silhouette Score' in metrics_to_calculate or 'Silhouette Score (Cluster)' in metrics_to_calculate:
+        sample_size = min(10000, data.shape[0])
+        if sample_size < data.shape[0]:
+            idx = np.random.choice(data.shape[0], sample_size, replace=False)
+            sample_data = data[idx]
+            sample_labels = labels[idx]
+        else:
+            sample_data = data
+            sample_labels = labels
+            
+        if len(np.unique(sample_labels)) > 1:
+            if 'Silhouette Score' in metrics_to_calculate:
+                scores['Silhouette Score'] = silhouette_score(sample_data, sample_labels)
+            
+            if 'Silhouette Score (Cluster)' in metrics_to_calculate:
+                sample_silhouette_values = silhouette_samples(sample_data, sample_labels)
+                per_cluster_silhouette = {}
+                for label in np.unique(sample_labels):
+                    cluster_sample_indices = np.where(sample_labels == label)[0]
+                    if cluster_sample_indices.size > 0:
+                        per_cluster_silhouette[label] = np.mean(sample_silhouette_values[cluster_sample_indices])
+                    else:
+                        per_cluster_silhouette[label] = np.nan
+                scores['Silhouette Score (Cluster)'] = per_cluster_silhouette
+        else:
+            if 'Silhouette Score' in metrics_to_calculate:
+                scores['Silhouette Score'] = np.nan
+            if 'Silhouette Score (Cluster)' in metrics_to_calculate:
+                scores['Silhouette Score (Cluster)'] = {label: np.nan for label in unique_labels}
+
+    if 'Davies-Bouldin Index' in metrics_to_calculate:
+        scores['Davies-Bouldin Index'] = davies_bouldin_score(data, labels)
+        
+    if 'Calinski-Harabasz Index' in metrics_to_calculate:
+        scores['Calinski-Harabasz Index'] = calinski_harabasz_score(data, labels)
+        
+    return scores
 
 def calculate_cluster_statistics(stack, cluster_mask, mask_root_name, image_names, output_dir, mask=None):
     """
@@ -36,6 +100,16 @@ def calculate_cluster_statistics(stack, cluster_mask, mask_root_name, image_name
     
     total_area_pixels = valid_indices.size
     
+    # Use calculate_scores for all evaluation metrics
+    scores = calculate_scores(valid_data, valid_labels)
+    
+    eval_metrics = {
+        'Silhouette Score': scores['Silhouette Score'],
+        'Davies-Bouldin Index': scores['Davies-Bouldin Index'],
+        'Calinski-Harabasz Index': scores['Calinski-Harabasz Index']
+    }
+    per_cluster_silhouette = scores['Silhouette Score (Cluster)'] if isinstance(scores['Silhouette Score (Cluster)'], dict) else {}
+
     stats_rows = []
     
     # Calculate per-cluster statistics
@@ -50,7 +124,8 @@ def calculate_cluster_statistics(stack, cluster_mask, mask_root_name, image_name
         row_base = {
             'Cluster': f"Cluster {label + 1}",
             'Size (pixels)': cluster_size_pixels,
-            'Size (%)': cluster_percentage
+            'Size (%)': cluster_percentage,
+            'Silhouette Score (Cluster)': per_cluster_silhouette.get(label, np.nan)
         }
         
         # Per probe (image) statistics
@@ -75,35 +150,6 @@ def calculate_cluster_statistics(stack, cluster_mask, mask_root_name, image_name
     # Create DataFrame
     df = pd.DataFrame(stats_rows)
     
-    # Overall evaluation metrics
-    eval_metrics = {}
-    
-    # These metrics can be slow for large datasets, consider sampling if needed
-    # But for now, we'll try to calculate them on the full valid data
-    # silhouette_score is particularly slow O(n^2)
-    sample_size = min(10000, valid_data.shape[0])
-    if sample_size < valid_data.shape[0]:
-        # Use a random sample for silhouette score to avoid memory/time issues
-        idx = np.random.choice(valid_data.shape[0], sample_size, replace=False)
-        sample_data = valid_data[idx]
-        sample_labels = valid_labels[idx]
-        if len(np.unique(sample_labels)) > 1:
-            eval_metrics['Silhouette Score'] = silhouette_score(sample_data, sample_labels)
-        else:
-            eval_metrics['Silhouette Score'] = np.nan
-    else:
-        if len(np.unique(valid_labels)) > 1:
-            eval_metrics['Silhouette Score'] = silhouette_score(valid_data, valid_labels)
-        else:
-            eval_metrics['Silhouette Score'] = np.nan
-
-    if len(np.unique(valid_labels)) > 1:
-        eval_metrics['Davies-Bouldin Index'] = davies_bouldin_score(valid_data, valid_labels)
-        eval_metrics['Calinski-Harabasz Index'] = calinski_harabasz_score(valid_data, valid_labels)
-    else:
-        eval_metrics['Davies-Bouldin Index'] = np.nan
-        eval_metrics['Calinski-Harabasz Index'] = np.nan
-        
     # Add evaluation metrics to the dataframe or as a separate section?
     # Usually better to have them as a separate block or in every row if they are global
     for metric, value in eval_metrics.items():

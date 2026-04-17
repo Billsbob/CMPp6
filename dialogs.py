@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QDoubleSpinBox, QSpinBox, 
     QDialogButtonBox, QComboBox, QCheckBox, QLabel, QListWidget, 
-    QPushButton, QListWidgetItem, QMessageBox, QWidget
+    QPushButton, QListWidgetItem, QMessageBox, QWidget, QLineEdit
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
@@ -74,7 +74,6 @@ class ClusterParameterDialog(QDialog):
             "normalize": False,
             "normalize_stack": False,
             "tol": 1e-4,
-            "cluster_under_mask": False,
             "include_coords": False,
             "x_weight": 1.0,
             "y_weight": 1.0
@@ -124,10 +123,6 @@ class ClusterParameterDialog(QDialog):
         self.normalize_stack_check.setChecked(self.params["normalize_stack"])
         form_layout.addRow("Normalize stack (global):", self.normalize_stack_check)
 
-        self.cluster_under_mask_check = QCheckBox()
-        self.cluster_under_mask_check.setChecked(self.params["cluster_under_mask"])
-        form_layout.addRow("Cluster only under selection:", self.cluster_under_mask_check)
-
         self.include_coords_check = QCheckBox()
         self.include_coords_check.setChecked(self.params["include_coords"])
         form_layout.addRow("Include Coordinates:", self.include_coords_check)
@@ -160,7 +155,6 @@ class ClusterParameterDialog(QDialog):
             "algorithm": self.algorithm_combo.currentText(),
             "normalize": self.normalize_check.isChecked(),
             "normalize_stack": self.normalize_stack_check.isChecked(),
-            "cluster_under_mask": self.cluster_under_mask_check.isChecked(),
             "include_coords": self.include_coords_check.isChecked(),
             "x_weight": self.x_weight_spin.value(),
             "y_weight": self.y_weight_spin.value()
@@ -179,7 +173,6 @@ class ISODATAParameterDialog(QDialog):
             "random_state": 0,
             "normalize": False,
             "normalize_stack": False,
-            "cluster_under_mask": False,
             "include_coords": False,
             "x_weight": 1.0,
             "y_weight": 1.0
@@ -234,10 +227,6 @@ class ISODATAParameterDialog(QDialog):
         self.normalize_stack_check.setChecked(self.params["normalize_stack"])
         form_layout.addRow("Normalize stack (global):", self.normalize_stack_check)
 
-        self.cluster_under_mask_check = QCheckBox()
-        self.cluster_under_mask_check.setChecked(self.params["cluster_under_mask"])
-        form_layout.addRow("Cluster only under selection:", self.cluster_under_mask_check)
-
         self.include_coords_check = QCheckBox()
         self.include_coords_check.setChecked(self.params["include_coords"])
         form_layout.addRow("Include Coordinates:", self.include_coords_check)
@@ -271,7 +260,6 @@ class ISODATAParameterDialog(QDialog):
             "random_state": self.random_state_spin.value(),
             "normalize": self.normalize_check.isChecked(),
             "normalize_stack": self.normalize_stack_check.isChecked(),
-            "cluster_under_mask": self.cluster_under_mask_check.isChecked(),
             "include_coords": self.include_coords_check.isChecked(),
             "x_weight": self.x_weight_spin.value(),
             "y_weight": self.y_weight_spin.value()
@@ -288,7 +276,6 @@ class GMMParameterDialog(QDialog):
             "random_state": 0,
             "normalize": False,
             "normalize_stack": False,
-            "cluster_under_mask": False,
             "include_coords": False,
             "x_weight": 1.0,
             "y_weight": 1.0
@@ -328,10 +315,6 @@ class GMMParameterDialog(QDialog):
         self.normalize_stack_check.setChecked(self.params["normalize_stack"])
         form_layout.addRow("Normalize stack (global):", self.normalize_stack_check)
 
-        self.cluster_under_mask_check = QCheckBox()
-        self.cluster_under_mask_check.setChecked(self.params["cluster_under_mask"])
-        form_layout.addRow("Cluster only under selection:", self.cluster_under_mask_check)
-
         self.include_coords_check = QCheckBox()
         self.include_coords_check.setChecked(self.params["include_coords"])
         form_layout.addRow("Include Coordinates:", self.include_coords_check)
@@ -362,7 +345,6 @@ class GMMParameterDialog(QDialog):
             "random_state": self.random_state_spin.value(),
             "normalize": self.normalize_check.isChecked(),
             "normalize_stack": self.normalize_stack_check.isChecked(),
-            "cluster_under_mask": self.cluster_under_mask_check.isChecked(),
             "include_coords": self.include_coords_check.isChecked(),
             "x_weight": self.x_weight_spin.value(),
             "y_weight": self.y_weight_spin.value()
@@ -429,6 +411,13 @@ class JointPlotDialog(QDialog):
         self.add_set_btn.clicked.connect(self._add_selection_set)
         self.main_layout.addWidget(self.add_set_btn)
 
+        # Filename input
+        filename_layout = QFormLayout()
+        self.filename_input = QLineEdit()
+        self.filename_input.setPlaceholderText("Enter custom filename (optional)")
+        filename_layout.addRow("Custom Filename:", self.filename_input)
+        self.main_layout.addLayout(filename_layout)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
@@ -485,5 +474,5 @@ class JointPlotDialog(QDialog):
                 "image1": sel["image1"].currentText(),
                 "image2": sel["image2"].currentText()
             })
-        return results
+        return results, self.filename_input.text().strip()
 

@@ -9,6 +9,7 @@ from PySide6.QtGui import QAction, QPixmap, QPainter, QPalette, QPen, QColor, QB
 from PySide6.QtCore import Qt, QSize, QPoint, QPointF, QRectF, Signal, QObject, QThread
 import os
 import numpy as np
+import pandas as pd
 import cv2
 import json
 import qimage2ndarray
@@ -109,9 +110,6 @@ class MainWindow(QMainWindow):
         self.delete_masks_btn = QPushButton("Delete")
         self.delete_masks_btn.setFixedWidth(60)
         self.delete_masks_btn.clicked.connect(self._delete_selected_masks)
-        self.merge_masks_btn = QPushButton("Merge")
-        self.merge_masks_btn.setFixedWidth(60)
-        self.merge_masks_btn.clicked.connect(self._merge_selected_masks)
         self.save_masks_btn = QPushButton("Save")
         self.save_masks_btn.setFixedWidth(60)
         self.save_masks_btn.clicked.connect(self._save_visible_masks)
@@ -119,7 +117,6 @@ class MainWindow(QMainWindow):
         mask_btn_layout.addWidget(self.select_all_masks_btn)
         mask_btn_layout.addWidget(self.select_none_masks_btn)
         mask_btn_layout.addWidget(self.delete_masks_btn)
-        mask_btn_layout.addWidget(self.merge_masks_btn)
         mask_btn_layout.addWidget(self.save_masks_btn)
         mask_btn_layout.addStretch()
 
@@ -493,7 +490,7 @@ class MainWindow(QMainWindow):
 
         dialog = JointPlotDialog(masks, images, self)
         if dialog.exec() == QDialog.Accepted:
-            selections = dialog.get_selections()
+            selections, user_filename = dialog.get_selections()
             
             try:
                 self.statusBar().showMessage("Generating Joint KDE Plot...")
@@ -532,7 +529,7 @@ class MainWindow(QMainWindow):
                     return
 
                 graph_dir = os.path.join(self.working_dir, "Graphs")
-                filename = kde_plots.create_joint_kde_plot(all_measurements, graph_dir)
+                filename = kde_plots.create_joint_kde_plot(all_measurements, graph_dir, user_filename=user_filename)
 
                 if filename:
                     self.statusBar().showMessage("Joint KDE Plot completed.", 3000)
@@ -767,10 +764,7 @@ class MainWindow(QMainWindow):
             individual_masks = clustering.get_individual_masks(cluster_mask, n_clusters)
 
             for i, mask in enumerate(individual_masks):
-                if mask_root_name != "KC" and mask_root_name != "GMM":
-                    new_mask_name = f"{mask_root_name}_{i+1:02d}.npy"
-                else:
-                    new_mask_name = f"{mask_root_name}_{i+1}.npy"
+                new_mask_name = f"{mask_root_name}_{i+1:02d}.npy"
                 np.save(os.path.join(mask_dir, new_mask_name), mask)
 
             msg = "Clustering completed."
@@ -824,32 +818,9 @@ class MainWindow(QMainWindow):
         dialog = ClusterParameterDialog(self)
         if dialog.exec() == QDialog.Accepted:
             params = dialog.get_params()
-            cluster_under_mask = params.pop("cluster_under_mask", False)
             mask_to_use = None
             mask_root_name = "KC"
             
-            if cluster_under_mask:
-                selected_masks = self.mask_list.selectedItems()
-                if len(selected_masks) != 1:
-                    QMessageBox.warning(self, "K-Means", "Please select exactly one mask to cluster under.")
-                    return
-                mask_name = selected_masks[0].text()
-                mask_root_name = os.path.splitext(mask_name)[0]
-                mask_path = os.path.join(self.working_dir, "Cluster Masks", mask_name)
-                
-                if os.path.exists(mask_path):
-                    try:
-                        mask_to_use = np.load(mask_path)
-                    except Exception as e:
-                        QMessageBox.critical(self, "K-Means", f"Failed to load mask {mask_name}: {str(e)}")
-                        return
-                else:
-                    # Fallback to asset manager for other formats if any
-                    mask_asset = self.asset_manager.get_image_by_name(mask_name)
-                    if mask_asset:
-                        mask_asset.load_project()
-                        mask_to_use = mask_asset.get_rendered_data(data_only=True)
-
             try:
                 self.statusBar().showMessage("Running K-Means...")
                 QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -903,30 +874,8 @@ class MainWindow(QMainWindow):
         dialog = GMMParameterDialog(self)
         if dialog.exec() == QDialog.Accepted:
             params = dialog.get_params()
-            cluster_under_mask = params.pop("cluster_under_mask", False)
             mask_to_use = None
             mask_root_name = "GMM"
-
-            if cluster_under_mask:
-                selected_masks = self.mask_list.selectedItems()
-                if len(selected_masks) != 1:
-                    QMessageBox.warning(self, "Gaussian Mixture", "Please select exactly one mask to cluster under.")
-                    return
-                mask_name = selected_masks[0].text()
-                mask_root_name = os.path.splitext(mask_name)[0]
-                mask_path = os.path.join(self.working_dir, "Cluster Masks", mask_name)
-
-                if os.path.exists(mask_path):
-                    try:
-                        mask_to_use = np.load(mask_path)
-                    except Exception as e:
-                        QMessageBox.critical(self, "Gaussian Mixture", f"Failed to load mask {mask_name}: {str(e)}")
-                        return
-                else:
-                    mask_asset = self.asset_manager.get_image_by_name(mask_name)
-                    if mask_asset:
-                        mask_asset.load_project()
-                        mask_to_use = mask_asset.get_rendered_data(data_only=True)
 
             try:
                 self.statusBar().showMessage("Running Gaussian Mixture...")
@@ -981,30 +930,8 @@ class MainWindow(QMainWindow):
         dialog = ISODATAParameterDialog(self)
         if dialog.exec() == QDialog.Accepted:
             params = dialog.get_params()
-            cluster_under_mask = params.pop("cluster_under_mask", False)
             mask_to_use = None
             mask_root_name = "ISODATA"
-
-            if cluster_under_mask:
-                selected_masks = self.mask_list.selectedItems()
-                if len(selected_masks) != 1:
-                    QMessageBox.warning(self, "ISODATA", "Please select exactly one mask to cluster under.")
-                    return
-                mask_name = selected_masks[0].text()
-                mask_root_name = os.path.splitext(mask_name)[0]
-                mask_path = os.path.join(self.working_dir, "Cluster Masks", mask_name)
-
-                if os.path.exists(mask_path):
-                    try:
-                        mask_to_use = np.load(mask_path)
-                    except Exception as e:
-                        QMessageBox.critical(self, "ISODATA", f"Failed to load mask {mask_name}: {str(e)}")
-                        return
-                else:
-                    mask_asset = self.asset_manager.get_image_by_name(mask_name)
-                    if mask_asset:
-                        mask_asset.load_project()
-                        mask_to_use = mask_asset.get_rendered_data(data_only=True)
 
             try:
                 self.statusBar().showMessage("Running ISODATA...")
@@ -1457,56 +1384,6 @@ class MainWindow(QMainWindow):
             self._update_mask_list()
             self.cached_composite = None
             self._refresh_viewer()
-
-    def _merge_selected_masks(self):
-        selected = self.mask_list.selectedItems()
-        if len(selected) < 2:
-            QMessageBox.warning(self, "Merge", "Please select two or more masks to merge.")
-            return
-
-        name, ok = QInputDialog.getText(self, "Merge Masks", "Enter name for the new mask:")
-        if not ok or not name:
-            return
-
-        if not name.lower().endswith(".npy"):
-            name += ".npy"
-
-        # Ensure name starts with a recognized prefix for consistency,
-        # though the list will now show any .npy file.
-        prefixes = ("KC_", "GMM_", "ISODATA_", "ThresholdMask_", "Merged_")
-        starts_with_prefix = False
-        for p in prefixes:
-            if name.upper().startswith(p.upper()):
-                starts_with_prefix = True
-                break
-        
-        if not starts_with_prefix:
-            name = "Merged_" + name
-
-        mask_dir = os.path.join(self.working_dir, "Cluster Masks")
-        merged_mask = None
-
-        for item in selected:
-            mask_name = item.text()
-            mask_path = os.path.join(mask_dir, mask_name)
-            if os.path.exists(mask_path):
-                mask = np.load(mask_path)
-                if merged_mask is None:
-                    merged_mask = mask.astype(bool)
-                else:
-                    if merged_mask.shape == mask.shape:
-                        merged_mask = np.logical_or(merged_mask, mask.astype(bool))
-                    else:
-                        QMessageBox.warning(self, "Merge", f"Mask '{mask_name}' has different dimensions and will be skipped.")
-
-        if merged_mask is not None:
-            # Save the merged mask
-            new_path = os.path.join(mask_dir, name)
-            np.save(new_path, merged_mask.astype(np.uint8)) # Store as uint8 for consistency
-            self._update_mask_list()
-            self.cached_composite = None
-            self._refresh_viewer()
-            QMessageBox.information(self, "Merge", f"Masks merged and saved as '{name}'.")
 
     def _save_visible_masks(self):
         if not self.visible_masks and self.preview_mask is None:

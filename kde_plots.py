@@ -17,7 +17,7 @@ def truncate_image_name(name):
         return f"{parts[-2]}_{parts[-1]}"
     return base_name
 
-def create_joint_kde_plot(all_measurements, output_dir):
+def create_joint_kde_plot(all_measurements, output_dir, user_filename=None):
     """
     Create a Joint KDE plot (Jointplot) for up to 3 sets of images under masks.
     
@@ -29,6 +29,7 @@ def create_joint_kde_plot(all_measurements, output_dir):
             - 'x_values': list
             - 'y_values': list
         output_dir (str): Directory to save the plot image.
+        user_filename (str, optional): Custom filename for the plot.
         
     Returns:
         str: Filename of the generated jointplot.
@@ -77,7 +78,9 @@ def create_joint_kde_plot(all_measurements, output_dir):
         sns.kdeplot(y=y, ax=g.ax_marg_y, color=palette[i], fill=True)
 
     # Use the JointGrid's figure to add the legend below
-    g.figure.legend(loc='lower center', bbox_to_anchor=(0.5, 0.02), ncol=1, fontsize='small')
+    handles, labels = g.ax_joint.get_legend_handles_labels()
+    if handles:
+        g.figure.legend(handles, labels, loc='lower center', bbox_to_anchor=(0.5, 0.02), ncol=1, fontsize='small')
     
     # Adjust the plot to make room for the legend at the bottom
     g.figure.subplots_adjust(top=0.9, bottom=0.2)
@@ -102,23 +105,34 @@ def create_joint_kde_plot(all_measurements, output_dir):
     g.set_axis_labels(x_label, y_label)
     
     # Construct the title using the descriptions
-    title = "Joint KDE Plots:\n" + "\n".join(descriptions)
+    # We will manually add text for each description line with its corresponding color
+    num_sets = len(all_measurements)
+    # Each line takes about 0.03 coordinate units
+    # Start y at 0.96 (since suptitle is removed)
+    start_y = 0.96
+    for i, desc in enumerate(descriptions):
+        line_y = start_y - (i * 0.03)
+        g.figure.text(0.5, line_y, desc, color=palette[i], 
+                      ha='center', va='center', fontsize='medium')
     
-    g.figure.suptitle(title, fontsize='medium')
-    # subplots_adjust is already called above, so we don't need to overwrite it here unless necessary.
-    # However, suptitle might need more space.
-    g.figure.subplots_adjust(top=0.85, bottom=0.2)
+    # Adjust the top margin to accommodate the title and lines
+    # suptitle at 0.96, then lines at 0.93, 0.90, 0.87
+    # So top margin should be around start_y - (num_sets * 0.03) - a bit extra
+    top_margin = start_y - (num_sets * 0.03) - 0.04
+    g.figure.subplots_adjust(top=top_margin, bottom=0.2)
     
-    # Generate a unique filename
-    import time
-    timestamp = int(time.time())
-    filename = f"JointPlot_Comparison_{timestamp}.png"
-    if len(all_measurements) == 1:
+    if user_filename:
+        filename = f"JointPlot_{user_filename}.png"
+    elif len(all_measurements) == 1:
         m = all_measurements[0]
         safe_image1 = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in truncate_image_name(m['image1_name'])])
         safe_image2 = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in truncate_image_name(m['image2_name'])])
         safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in m['mask_name']])
         filename = f"JointPlot_{safe_image1}_vs_{safe_image2}_{safe_mask_name}.png"
+    else:
+        import time
+        timestamp = int(time.time())
+        filename = f"JointPlot_{timestamp}.png"
 
     path = os.path.join(output_dir, filename)
     g.savefig(path)
