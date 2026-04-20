@@ -99,8 +99,12 @@ class ImageDisplayHandler:
             norm_data *= scaling_factor
 
             if target_shape is None:
-                target_shape = data.shape
+                target_shape = data.shape[:2]
                 composite_rgb = np.zeros((*target_shape, 3), dtype=np.float32)
+
+            if data.shape[:2] != target_shape:
+                # Resize image to match current composite
+                norm_data = cv2.resize(norm_data, (target_shape[1], target_shape[0]), interpolation=cv2.INTER_LINEAR)
 
             color_name = image_asset.pipeline.config.get("color") or self.get_asset_color(name)
             color_rgb = self.COLORS.get(color_name, (1, 1, 1))

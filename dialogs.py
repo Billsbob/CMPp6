@@ -62,8 +62,9 @@ class FilterParameterDialog(QDialog):
         return self.params
 
 class ClusterParameterDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, mask_names=None, parent=None):
         super().__init__(parent)
+        self.mask_names = mask_names or []
         self.params = {
             "n_clusters": 8,
             "max_iter": 300,
@@ -76,7 +77,8 @@ class ClusterParameterDialog(QDialog):
             "tol": 1e-4,
             "include_coords": False,
             "x_weight": 1.0,
-            "y_weight": 1.0
+            "y_weight": 1.0,
+            "mask_name": "None"
         }
         self.setup_ui()
 
@@ -123,6 +125,13 @@ class ClusterParameterDialog(QDialog):
         self.normalize_stack_check.setChecked(self.params["normalize_stack"])
         form_layout.addRow("Normalize stack (global):", self.normalize_stack_check)
 
+        self.mask_combo = QComboBox()
+        self.mask_combo.addItem("None")
+        if self.mask_names:
+            self.mask_combo.addItems(self.mask_names)
+        self.mask_combo.setCurrentText(self.params.get("mask_name", "None"))
+        form_layout.addRow("Cluster under Mask:", self.mask_combo)
+
         self.include_coords_check = QCheckBox()
         self.include_coords_check.setChecked(self.params["include_coords"])
         form_layout.addRow("Include Coordinates:", self.include_coords_check)
@@ -155,14 +164,16 @@ class ClusterParameterDialog(QDialog):
             "algorithm": self.algorithm_combo.currentText(),
             "normalize": self.normalize_check.isChecked(),
             "normalize_stack": self.normalize_stack_check.isChecked(),
+            "mask_name": self.mask_combo.currentText(),
             "include_coords": self.include_coords_check.isChecked(),
             "x_weight": self.x_weight_spin.value(),
             "y_weight": self.y_weight_spin.value()
         }
 
 class ISODATAParameterDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, mask_names=None, parent=None):
         super().__init__(parent)
+        self.mask_names = mask_names or []
         self.params = {
             "n_clusters": 8,
             "max_iter": 100,
@@ -175,7 +186,8 @@ class ISODATAParameterDialog(QDialog):
             "normalize_stack": False,
             "include_coords": False,
             "x_weight": 1.0,
-            "y_weight": 1.0
+            "y_weight": 1.0,
+            "mask_name": "None"
         }
         self.setup_ui()
 
@@ -227,6 +239,13 @@ class ISODATAParameterDialog(QDialog):
         self.normalize_stack_check.setChecked(self.params["normalize_stack"])
         form_layout.addRow("Normalize stack (global):", self.normalize_stack_check)
 
+        self.mask_combo = QComboBox()
+        self.mask_combo.addItem("None")
+        if self.mask_names:
+            self.mask_combo.addItems(self.mask_names)
+        self.mask_combo.setCurrentText(self.params.get("mask_name", "None"))
+        form_layout.addRow("Cluster under Mask:", self.mask_combo)
+
         self.include_coords_check = QCheckBox()
         self.include_coords_check.setChecked(self.params["include_coords"])
         form_layout.addRow("Include Coordinates:", self.include_coords_check)
@@ -260,14 +279,16 @@ class ISODATAParameterDialog(QDialog):
             "random_state": self.random_state_spin.value(),
             "normalize": self.normalize_check.isChecked(),
             "normalize_stack": self.normalize_stack_check.isChecked(),
+            "mask_name": self.mask_combo.currentText(),
             "include_coords": self.include_coords_check.isChecked(),
             "x_weight": self.x_weight_spin.value(),
             "y_weight": self.y_weight_spin.value()
         }
 
 class GMMParameterDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, mask_names=None, parent=None):
         super().__init__(parent)
+        self.mask_names = mask_names or []
         self.params = {
             "n_components": 8,
             "covariance_type": "full",
@@ -278,7 +299,8 @@ class GMMParameterDialog(QDialog):
             "normalize_stack": False,
             "include_coords": False,
             "x_weight": 1.0,
-            "y_weight": 1.0
+            "y_weight": 1.0,
+            "mask_name": "None"
         }
         self.setup_ui()
 
@@ -315,6 +337,13 @@ class GMMParameterDialog(QDialog):
         self.normalize_stack_check.setChecked(self.params["normalize_stack"])
         form_layout.addRow("Normalize stack (global):", self.normalize_stack_check)
 
+        self.mask_combo = QComboBox()
+        self.mask_combo.addItem("None")
+        if self.mask_names:
+            self.mask_combo.addItems(self.mask_names)
+        self.mask_combo.setCurrentText(self.params.get("mask_name", "None"))
+        form_layout.addRow("Cluster under Mask:", self.mask_combo)
+
         self.include_coords_check = QCheckBox()
         self.include_coords_check.setChecked(self.params["include_coords"])
         form_layout.addRow("Include Coordinates:", self.include_coords_check)
@@ -345,6 +374,7 @@ class GMMParameterDialog(QDialog):
             "random_state": self.random_state_spin.value(),
             "normalize": self.normalize_check.isChecked(),
             "normalize_stack": self.normalize_stack_check.isChecked(),
+            "mask_name": self.mask_combo.currentText(),
             "include_coords": self.include_coords_check.isChecked(),
             "x_weight": self.x_weight_spin.value(),
             "y_weight": self.y_weight_spin.value()

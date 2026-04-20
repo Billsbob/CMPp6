@@ -238,8 +238,8 @@ class MainWindow(QMainWindow):
 
         tools_menu = menu_bar.addMenu("Tools")
         
-        invert_action = QAction("Invert", self)
-        invert_action.triggered.connect(self._invert_selected_images)
+        invert_action = QAction("Invert All", self)
+        invert_action.triggered.connect(self._invert_all_images)
         tools_menu.addAction(invert_action)
 
         crop_action = QAction("Crop All", self)
@@ -253,20 +253,20 @@ class MainWindow(QMainWindow):
         filters_menu = tools_menu.addMenu("Filters")
         for f in ["gaussian", "median", "mean", "blur", "unsharp"]:
             action = QAction(f.capitalize(), self)
-            action.triggered.connect(lambda checked=False, name=f: self._apply_filter_to_visible(name))
+            action.triggered.connect(lambda checked=False, name=f: self._apply_filter_to_all(name))
             filters_menu.addAction(action)
 
         image_adjustments_menu = tools_menu.addMenu("Image Adjustments")
-        undo_invert_action = QAction("Undo Invert", self)
-        undo_invert_action.triggered.connect(self._undo_invert_selected)
+        undo_invert_action = QAction("Undo Invert All", self)
+        undo_invert_action.triggered.connect(self._undo_invert_all)
         image_adjustments_menu.addAction(undo_invert_action)
 
-        undo_rotation_action = QAction("Undo Rotation", self)
-        undo_rotation_action.triggered.connect(self._undo_rotation_selected)
+        undo_rotation_action = QAction("Undo Rotation All", self)
+        undo_rotation_action.triggered.connect(self._undo_rotation_all)
         image_adjustments_menu.addAction(undo_rotation_action)
 
-        undo_crop_action = QAction("Undo Crop", self)
-        undo_crop_action.triggered.connect(self._undo_crop_selected)
+        undo_crop_action = QAction("Undo Crop All", self)
+        undo_crop_action.triggered.connect(self._undo_crop_all)
         image_adjustments_menu.addAction(undo_crop_action)
 
         tools_menu.addSeparator()
@@ -815,11 +815,27 @@ class MainWindow(QMainWindow):
         # Ensure stack is float32
         stack = stack.astype(np.float32)
 
-        dialog = ClusterParameterDialog(self)
+        # Get available masks
+        mask_names = []
+        mask_dir = os.path.join(self.working_dir, "Cluster Masks")
+        if os.path.exists(mask_dir):
+            mask_names = [f for f in os.listdir(mask_dir) if f.lower().endswith(".npy")]
+            mask_names.sort()
+
+        dialog = ClusterParameterDialog(mask_names, self)
         if dialog.exec() == QDialog.Accepted:
             params = dialog.get_params()
             mask_to_use = None
-            mask_root_name = "KC"
+            mask_name = params.pop("mask_name", "None")
+            if mask_name != "None":
+                mask_root_name = os.path.splitext(mask_name)[0]
+                mask_path = os.path.join(mask_dir, mask_name)
+                try:
+                    mask_to_use = np.load(mask_path)
+                except Exception as e:
+                    QMessageBox.warning(self, "K-Means", f"Failed to load mask: {str(e)}")
+            else:
+                mask_root_name = "k"
             
             try:
                 self.statusBar().showMessage("Running K-Means...")
@@ -871,11 +887,27 @@ class MainWindow(QMainWindow):
         # Ensure stack is float32
         stack = stack.astype(np.float32)
 
-        dialog = GMMParameterDialog(self)
+        # Get available masks
+        mask_names = []
+        mask_dir = os.path.join(self.working_dir, "Cluster Masks")
+        if os.path.exists(mask_dir):
+            mask_names = [f for f in os.listdir(mask_dir) if f.lower().endswith(".npy")]
+            mask_names.sort()
+
+        dialog = GMMParameterDialog(mask_names, self)
         if dialog.exec() == QDialog.Accepted:
             params = dialog.get_params()
             mask_to_use = None
-            mask_root_name = "GMM"
+            mask_name = params.pop("mask_name", "None")
+            if mask_name != "None":
+                mask_root_name = os.path.splitext(mask_name)[0]
+                mask_path = os.path.join(mask_dir, mask_name)
+                try:
+                    mask_to_use = np.load(mask_path)
+                except Exception as e:
+                    QMessageBox.warning(self, "Gaussian Mixture", f"Failed to load mask: {str(e)}")
+            else:
+                mask_root_name = "gm"
 
             try:
                 self.statusBar().showMessage("Running Gaussian Mixture...")
@@ -927,11 +959,27 @@ class MainWindow(QMainWindow):
         # Ensure stack is float32
         stack = stack.astype(np.float32)
 
-        dialog = ISODATAParameterDialog(self)
+        # Get available masks
+        mask_names = []
+        mask_dir = os.path.join(self.working_dir, "Cluster Masks")
+        if os.path.exists(mask_dir):
+            mask_names = [f for f in os.listdir(mask_dir) if f.lower().endswith(".npy")]
+            mask_names.sort()
+
+        dialog = ISODATAParameterDialog(mask_names, self)
         if dialog.exec() == QDialog.Accepted:
             params = dialog.get_params()
             mask_to_use = None
-            mask_root_name = "ISODATA"
+            mask_name = params.pop("mask_name", "None")
+            if mask_name != "None":
+                mask_root_name = os.path.splitext(mask_name)[0]
+                mask_path = os.path.join(mask_dir, mask_name)
+                try:
+                    mask_to_use = np.load(mask_path)
+                except Exception as e:
+                    QMessageBox.warning(self, "ISODATA", f"Failed to load mask: {str(e)}")
+            else:
+                mask_root_name = "I"
 
             try:
                 self.statusBar().showMessage("Running ISODATA...")
@@ -1147,53 +1195,57 @@ class MainWindow(QMainWindow):
         menu.exec(list_widget.mapToGlobal(position))
 
 
-    def _undo_invert_selected(self):
-        selected = self.image_list.selectedItems()
-        if not selected:
-            QMessageBox.information(self, "Undo Invert", "Please select at least one image.")
+    def _undo_invert_all(self):
+        if not self.asset_manager.images:
             return
-        
-        for item in selected:
-            asset = self.asset_manager.get_image_by_name(item.text())
-            if asset:
-                asset.pipeline.config["invert"] = False
-                asset.save_project()
+            
+        reply = QMessageBox.warning(self, "Undo for All", 
+                                  "This will UNDO inversion for ALL loaded images. Do you want to continue?",
+                                  QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.No:
+            return
+
+        for name, asset in self.asset_manager.images.items():
+            asset.pipeline.config["invert"] = False
+            asset.save_project()
         
         self.cached_composite = None
         self._update_asset_list()
         self._refresh_viewer()
 
-    def _undo_rotation_selected(self):
-        selected = self.image_list.selectedItems()
-        if not selected:
-            QMessageBox.information(self, "Undo Rotation", "Please select at least one image.")
+    def _undo_rotation_all(self):
+        if not self.asset_manager.images:
             return
-        
-        for item in selected:
-            asset = self.asset_manager.get_image_by_name(item.text())
-            if asset:
-                transforms = asset.pipeline.config.get("transforms", [])
-                # Filter out rotation transforms
-                asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "rotate"]
-                asset.save_project()
+            
+        reply = QMessageBox.warning(self, "Undo for All", 
+                                  "This will REMOVE rotation from ALL loaded images. Do you want to continue?",
+                                  QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.No:
+            return
+
+        for name, asset in self.asset_manager.images.items():
+            transforms = asset.pipeline.config.get("transforms", [])
+            asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "rotate"]
+            asset.save_project()
         
         self.cached_composite = None
         self._update_asset_list()
         self._refresh_viewer()
 
-    def _undo_crop_selected(self):
-        selected = self.image_list.selectedItems()
-        if not selected:
-            QMessageBox.information(self, "Undo Crop", "Please select at least one image.")
+    def _undo_crop_all(self):
+        if not self.asset_manager.images:
             return
-        
-        for item in selected:
-            asset = self.asset_manager.get_image_by_name(item.text())
-            if asset:
-                transforms = asset.pipeline.config.get("transforms", [])
-                # Filter out crop transforms
-                asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "crop"]
-                asset.save_project()
+            
+        reply = QMessageBox.warning(self, "Undo for All", 
+                                  "This will REMOVE crop from ALL loaded images. Do you want to continue?",
+                                  QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.No:
+            return
+
+        for name, asset in self.asset_manager.images.items():
+            transforms = asset.pipeline.config.get("transforms", [])
+            asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "crop"]
+            asset.save_project()
         
         self.cached_composite = None
         self._update_asset_list()
@@ -1222,27 +1274,41 @@ class MainWindow(QMainWindow):
         self._update_asset_list()
         self._refresh_viewer()
 
-    def _invert_selected_images(self):
-        for item in self.image_list.selectedItems():
-            asset = self.asset_manager.get_image_by_name(item.text())
+    def _invert_all_images(self):
+        if not self.asset_manager.images:
+            return
+            
+        reply = QMessageBox.warning(self, "Apply to All", 
+                                  "This operation will be applied to ALL loaded images. Do you want to continue?",
+                                  QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.No:
+            return
+
+        for name, asset in self.asset_manager.images.items():
             asset.pipeline.config["invert"] = not asset.pipeline.config.get("invert", False)
             asset.save_project()
         self.cached_composite = None
         self._update_asset_list()
         self._refresh_viewer()
 
-    def _apply_filter_to_visible(self, filter_name):
-        selected = self.image_list.selectedItems()
-        if not selected: return
+    def _apply_filter_to_all(self, filter_name):
+        if not self.asset_manager.images:
+            return
+            
+        reply = QMessageBox.warning(self, "Apply to All", 
+                                  f"The {filter_name} filter will be applied to ALL loaded images. Do you want to continue?",
+                                  QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.No:
+            return
         
-        first_asset = self.asset_manager.get_image_by_name(selected[0].text())
+        # Use the first image's params as initial if available
+        first_asset = list(self.asset_manager.images.values())[0]
         initial_params = first_asset.pipeline.config.get("filter_params", {}).get(filter_name, {})
         
         dialog = FilterParameterDialog(filter_name, initial_params, self)
         if dialog.exec() == QDialog.Accepted:
             params = dialog.get_params()
-            for item in selected:
-                asset = self.asset_manager.get_image_by_name(item.text())
+            for name, asset in self.asset_manager.images.items():
                 if filter_name not in asset.pipeline.config["filters"]:
                     asset.pipeline.config["filters"].append(filter_name)
                 if "filter_params" not in asset.pipeline.config:
@@ -1254,11 +1320,20 @@ class MainWindow(QMainWindow):
             self._refresh_viewer()
 
     def _crop_all(self):
+        if not self.asset_manager.images:
+            return
+
         rect = self.viewer_view.get_selection_rect()
         if not rect:
             QMessageBox.warning(self, "No Selection", "Please create a selection rectangle first.")
             return
         
+        reply = QMessageBox.warning(self, "Apply to All", 
+                                  "This crop operation will be applied to ALL loaded images. Do you want to continue?",
+                                  QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.No:
+            return
+
         for name, asset in self.asset_manager.images.items():
             asset.pipeline.config.setdefault("transforms", []).append({"type": "crop", "params": rect})
             asset.save_project()
@@ -1269,8 +1344,17 @@ class MainWindow(QMainWindow):
         self.viewer_view.clear_selection()
 
     def _rotate_all(self):
+        if not self.asset_manager.images:
+            return
+
         angle, ok = QInputDialog.getDouble(self, "Rotate All", "Angle (degrees):", 0, -360, 360, 1)
         if ok:
+            reply = QMessageBox.warning(self, "Apply to All", 
+                                      f"This rotation of {angle} degrees will be applied to ALL loaded images. Do you want to continue?",
+                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply == QMessageBox.No:
+                return
+
             for name, asset in self.asset_manager.images.items():
                 asset.pipeline.config.setdefault("transforms", []).append({"type": "rotate", "angle": angle})
                 asset.save_project()
@@ -1450,7 +1534,7 @@ class MainWindow(QMainWindow):
                         if os.path.exists(mask_path):
                             mask = np.load(mask_path)
                             if mask.shape != composite_rgb.shape[:2]:
-                                continue
+                                mask = cv2.resize(mask, (composite_rgb.shape[1], composite_rgb.shape[0]), interpolation=cv2.INTER_NEAREST)
                             
                             # Generate a color for the mask or use the selected one
                             color_name = self.image_handler.get_asset_color(mask_name)
@@ -1480,13 +1564,15 @@ class MainWindow(QMainWindow):
 
                 if self.preview_mask is not None:
                     mask = self.preview_mask
-                    if mask.shape == composite_rgb.shape[:2]:
-                        r, g, b = self.preview_color.red(), self.preview_color.green(), self.preview_color.blue()
-                        mask_bool = mask.astype(bool)
-                        preview_opacity = 0.7
-                        overlay = composite_rgb.copy()
-                        overlay[mask_bool] = [r, g, b]
-                        cv2.addWeighted(overlay, preview_opacity, composite_rgb, 1 - preview_opacity, 0, composite_rgb)
+                    if mask.shape != composite_rgb.shape[:2]:
+                        mask = cv2.resize(mask, (composite_rgb.shape[1], composite_rgb.shape[0]), interpolation=cv2.INTER_NEAREST)
+                    
+                    r, g, b = self.preview_color.red(), self.preview_color.green(), self.preview_color.blue()
+                    mask_bool = mask.astype(bool)
+                    preview_opacity = 0.7
+                    overlay = composite_rgb.copy()
+                    overlay[mask_bool] = [r, g, b]
+                    cv2.addWeighted(overlay, preview_opacity, composite_rgb, 1 - preview_opacity, 0, composite_rgb)
                 
                 # Convert back to QImage
                 self.cached_composite = qimage2ndarray.array2qimage(composite_rgb).copy()
