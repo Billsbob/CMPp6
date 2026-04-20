@@ -1,6 +1,11 @@
 Computational Metabolic Phenotyping within a PyQT6 GUI (CMPp6)
+
+
   To install, download repository to desired folder.
+  
   Current version uses python 3.14, backwards compatible with 3.13
+
+  
   Use PowerShell or cmd prompt
   Navigate to saved location : cd c:\...\venv location
   Create and activate a venv : python -m venv CMP 
