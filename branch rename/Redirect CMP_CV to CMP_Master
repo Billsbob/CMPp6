@@ -1,0 +1,11 @@
+
+The default branch has been renamed!
+
+CMP_CV is now named CMP_Master
+
+If you have a local clone, you can update it by running the following commands.
+
+git branch -m CMP_CV CMP_Master
+git fetch origin
+git branch -u origin/CMP_Master CMP_Master
+git remote set-head origin -a
