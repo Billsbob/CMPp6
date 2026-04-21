@@ -1,6 +1,6 @@
 import numpy as np
 import os
-from assets import AssetManager
+from .assets import AssetManager
 
 
 def load_and_stack_images(asset_manager: AssetManager, image_names=None):

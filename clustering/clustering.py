@@ -1,7 +1,7 @@
 import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
-import coordinate_features
+from . import coordinate_features
 
 def _apply_normalization(stack, normalize_stack=False, normalize=False):
     """

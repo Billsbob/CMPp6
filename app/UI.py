@@ -13,18 +13,18 @@ import pandas as pd
 import cv2
 import json
 import qimage2ndarray
-from assets import AssetManager
-from image_handler import ImageDisplayHandler
-import image_stacker
+from data.assets import AssetManager
+from data.image_handler import ImageDisplayHandler
+from data import image_stacker
 import clustering
-import measure_utilities
-import histogram_plots
-import kde_plots
-import export_plot_utils
-import mask_refinement
-from workers import ClusteringWorker
-from widgets import ZoomableView
-from dialogs import (
+from analysis import measure_utilities
+from analysis import histogram_plots
+from analysis import kde_plots
+from analysis import export_plot_utils
+from processing import mask_refinement
+from .workers import ClusteringWorker
+from .widgets import ZoomableView
+from .dialogs import (
     FilterParameterDialog, ClusterParameterDialog, ISODATAParameterDialog,
     GMMParameterDialog, ThresholdParameterDialog, JointPlotDialog,
     RefineMaskDialog, MaskPropertiesDialog

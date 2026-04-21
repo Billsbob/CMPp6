@@ -1,6 +1,7 @@
 import numpy as np
 from PySide6.QtCore import QObject, Signal
 import clustering
+from clustering import cluster_statistics
 
 class ClusteringWorker(QObject):
     finished = Signal(object, str, int, object)  # result_mask, mask_root_name, n_clusters, stats_info
@@ -56,7 +57,6 @@ class ClusteringWorker(QObject):
             # Generate statistics
             stats_csv_path = None
             if self.stack is not None and self.image_names is not None and self.output_dir is not None:
-                import cluster_statistics
                 stats_csv_path = cluster_statistics.calculate_cluster_statistics(
                     self.stack, result_mask, self.mask_root_name, 
                     self.image_names, self.output_dir, mask=self.mask

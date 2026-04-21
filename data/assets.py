@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import json
-import image_manipulation
+from . import image_manipulation
 import cv2
 import qimage2ndarray
 from PySide6.QtGui import QImage, QPixmap

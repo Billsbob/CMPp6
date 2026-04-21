@@ -3,7 +3,7 @@ os.environ['QT_API'] = 'pyside6'
 import numpy as np
 import cv2
 import os
-from assets import Asset, TransformPipeline
+from .assets import Asset, TransformPipeline
 import clustering
 
 def create_test_images():
