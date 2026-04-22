@@ -110,6 +110,9 @@ class MainWindow(QMainWindow):
         self.delete_masks_btn = QPushButton("Delete")
         self.delete_masks_btn.setFixedWidth(60)
         self.delete_masks_btn.clicked.connect(self._delete_selected_masks)
+        self.merge_masks_btn = QPushButton("Merge")
+        self.merge_masks_btn.setFixedWidth(60)
+        self.merge_masks_btn.clicked.connect(self._merge_selected_masks)
         self.save_masks_btn = QPushButton("Save")
         self.save_masks_btn.setFixedWidth(60)
         self.save_masks_btn.clicked.connect(self._save_visible_masks)
@@ -117,6 +120,7 @@ class MainWindow(QMainWindow):
         mask_btn_layout.addWidget(self.select_all_masks_btn)
         mask_btn_layout.addWidget(self.select_none_masks_btn)
         mask_btn_layout.addWidget(self.delete_masks_btn)
+        mask_btn_layout.addWidget(self.merge_masks_btn)
         mask_btn_layout.addWidget(self.save_masks_btn)
         mask_btn_layout.addStretch()
 
@@ -273,10 +277,6 @@ class MainWindow(QMainWindow):
         export_images_action = QAction("Export Modified Images", self)
         export_images_action.triggered.connect(self._export_modified_images)
         tools_menu.addAction(export_images_action)
-
-        stack_action = QAction("Stack Images", self)
-        stack_action.triggered.connect(self._stack_images)
-        tools_menu.addAction(stack_action)
 
         threshold_mask_action = QAction("Mask From Threshold", self)
         threshold_mask_action.triggered.connect(self._create_threshold_mask)
@@ -1468,6 +1468,38 @@ class MainWindow(QMainWindow):
             self._update_mask_list()
             self.cached_composite = None
             self._refresh_viewer()
+
+    def _merge_selected_masks(self):
+        selected = self.mask_list.selectedItems()
+        if len(selected) < 2:
+            QMessageBox.warning(self, "Merge Masks", "Please select at least two masks to merge.")
+            return
+
+        mask_dir = os.path.join(self.working_dir, "Cluster Masks")
+        merged_mask = None
+        
+        for item in selected:
+            mask_path = os.path.join(mask_dir, item.text())
+            if os.path.exists(mask_path):
+                mask = np.load(mask_path)
+                if merged_mask is None:
+                    merged_mask = mask.astype(bool)
+                else:
+                    if mask.shape == merged_mask.shape:
+                        merged_mask |= mask.astype(bool)
+                    else:
+                        # Resize if shapes don't match (unlikely but safe)
+                        mask_resized = cv2.resize(mask.astype(np.uint8), (merged_mask.shape[1], merged_mask.shape[0]), interpolation=cv2.INTER_NEAREST)
+                        merged_mask |= mask_resized.astype(bool)
+
+        if merged_mask is not None:
+            new_name, ok = QInputDialog.getText(self, "Merge Masks", "Enter name for merged mask:", QLineEdit.Normal, "MergedMask.npy")
+            if ok and new_name:
+                if not new_name.endswith(".npy"):
+                    new_name += ".npy"
+                np.save(os.path.join(mask_dir, new_name), merged_mask.astype(np.uint8))
+                self._update_mask_list()
+                QMessageBox.information(self, "Merge Masks", f"Merged mask saved as {new_name}")
 
     def _save_visible_masks(self):
         if not self.visible_masks and self.preview_mask is None:
