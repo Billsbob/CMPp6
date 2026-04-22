@@ -27,8 +27,19 @@ from .widgets import ZoomableView
 from .dialogs import (
     FilterParameterDialog, ClusterParameterDialog, ISODATAParameterDialog,
     GMMParameterDialog, ThresholdParameterDialog, JointPlotDialog,
-    RefineMaskDialog, MaskPropertiesDialog
+    RefineMaskDialog, MaskPropertiesDialog, PackageDataDialog
 )
+from data_packaging.data_packager import package_data_to_json
+try:
+    from Data_Organization import project_manager
+except ImportError:
+    try:
+        import sys
+        import os
+        sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), "Data Organization"))
+        import project_manager
+    except ImportError:
+        project_manager = None
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -115,11 +126,15 @@ class MainWindow(QMainWindow):
         self.save_masks_btn = QPushButton("Save")
         self.save_masks_btn.setFixedWidth(60)
         self.save_masks_btn.clicked.connect(self._save_visible_masks)
+        self.merge_masks_btn = QPushButton("Merge")
+        self.merge_masks_btn.setFixedWidth(60)
+        self.merge_masks_btn.clicked.connect(self._merge_masks)
         
         mask_btn_layout.addWidget(self.select_all_masks_btn)
         mask_btn_layout.addWidget(self.select_none_masks_btn)
         mask_btn_layout.addWidget(self.delete_masks_btn)
         mask_btn_layout.addWidget(self.save_masks_btn)
+        mask_btn_layout.addWidget(self.merge_masks_btn)
         mask_btn_layout.addStretch()
 
         self.mask_list = QListWidget()
@@ -276,10 +291,6 @@ class MainWindow(QMainWindow):
         export_images_action.triggered.connect(self._export_modified_images)
         tools_menu.addAction(export_images_action)
 
-        stack_action = QAction("Stack Images", self)
-        stack_action.triggered.connect(self._stack_images)
-        tools_menu.addAction(stack_action)
-
         threshold_mask_action = QAction("Mask From Threshold", self)
         threshold_mask_action.triggered.connect(self._create_threshold_mask)
         tools_menu.addAction(threshold_mask_action)
@@ -314,6 +325,10 @@ class MainWindow(QMainWindow):
         properties_table_action = QAction("Properties Table", self)
         properties_table_action.triggered.connect(self._show_mask_properties)
         mask_menu.addAction(properties_table_action)
+
+        package_data_action = QAction("Package Data", self)
+        package_data_action.triggered.connect(self._package_data)
+        menu_bar.addAction(package_data_action)
         
     def _home_triggered(self):
         directory = QFileDialog.getExistingDirectory(self, "Select Working Directory")
@@ -465,9 +480,13 @@ class MainWindow(QMainWindow):
                 return
 
             graph_dir = os.path.join(self.working_dir, "Graphs")
-            histogram_plots.create_histograms(measurements, mask_name, graph_dir)
+            hist_files = histogram_plots.create_histograms(measurements, mask_name, graph_dir)
             histogram_plots.create_overlaid_histogram(measurements, mask_name, graph_dir)
             export_plot_utils.save_measurements_json(measurements, mask_name, graph_dir)
+
+            # Update project JSON with histogram info
+            if project_manager:
+                project_manager.update_histogram_metadata(self.working_dir, image_names, mask_name, hist_files)
 
             self.statusBar().showMessage("Graphing completed.", 3000)
             self._update_graph_list()
@@ -767,16 +786,32 @@ class MainWindow(QMainWindow):
             self._update_graph_list()
             self._show_graphs_window()
 
-    def _on_clustering_finished(self, cluster_mask, mask_root_name, n_clusters, stats_csv_path):
+    def _on_clustering_finished(self, cluster_mask, mask_root_name, n_clusters, stats_csv_path, params, algorithm):
         try:
             mask_dir = os.path.join(self.working_dir, "Cluster Masks")
             os.makedirs(mask_dir, exist_ok=True)
 
             individual_masks = clustering.get_individual_masks(cluster_mask, n_clusters)
+            
+            # Map algorithm to cluster initials
+            algo_map = {"kmeans": "KM", "gmm": "GM", "isodata": "IS"}
+            initials = algo_map.get(algorithm, "CM")
 
+            # Extract probes from image names if possible
+            # Standard: <Sample>_<Slide ##>_<Owner Initials>_<ObjectiveMag>_<Well Position>_<Probe>
+            probes = []
+            image_list = self.asset_manager.get_image_list() # Just for reference if needed
+            # We need the image_names used for clustering. 
+            # They are available in the worker but we don't pass them back yet.
+            # Actually they are in self.clustering_worker.image_names
+            image_names = self.clustering_worker.image_names
+            
             for i, mask in enumerate(individual_masks):
-                new_mask_name = f"{mask_root_name}_{i+1:02d}.npy"
-                np.save(os.path.join(mask_dir, new_mask_name), mask)
+                new_mask_name = f"{initials}_{i+1:02d}"
+                np.save(os.path.join(mask_dir, f"{new_mask_name}.npy"), mask)
+                
+                if project_manager:
+                    project_manager.update_mask_metadata(self.working_dir, image_names, new_mask_name, algorithm, params)
 
             msg = "Clustering completed."
             if stats_csv_path:
@@ -1220,6 +1255,10 @@ class MainWindow(QMainWindow):
         rename_action = QAction("Rename", self)
         rename_action.triggered.connect(lambda: self._rename_item(item, "Cluster Masks", self.mask_list))
         menu.addAction(rename_action)
+
+        merge_action = QAction("Merge Selected", self)
+        merge_action.triggered.connect(self._merge_masks)
+        menu.addAction(merge_action)
         
         menu.exec(self.mask_list.mapToGlobal(position))
 
@@ -1592,6 +1631,41 @@ class MainWindow(QMainWindow):
             else:
                 QMessageBox.critical(self, "Save Masks", "Failed to save the image.")
 
+    def _merge_masks(self):
+        selected_items = self.mask_list.selectedItems()
+        if len(selected_items) < 2:
+            QMessageBox.warning(self, "Merge Masks", "Please select at least two masks to merge.")
+            return
+
+        mask_names = [item.text() for item in selected_items]
+        mask_dir = os.path.join(self.working_dir, "Cluster Masks")
+        
+        merged_mask = None
+        for name in mask_names:
+            path = os.path.join(mask_dir, name)
+            if os.path.exists(path):
+                mask = np.load(path)
+                if merged_mask is None:
+                    merged_mask = mask.copy()
+                else:
+                    if merged_mask.shape == mask.shape:
+                        merged_mask = np.logical_or(merged_mask, mask).astype(np.uint8)
+                    else:
+                        # Resize if shapes don't match (should ideally not happen)
+                        resized_mask = cv2.resize(mask, (merged_mask.shape[1], merged_mask.shape[0]), interpolation=cv2.INTER_NEAREST)
+                        merged_mask = np.logical_or(merged_mask, resized_mask).astype(np.uint8)
+
+        if merged_mask is not None:
+            new_name, ok = QInputDialog.getText(self, "Merge Masks", "Enter name for merged mask:", QLineEdit.Normal, "MergedMask.npy")
+            if ok and new_name:
+                if not new_name.endswith(".npy"):
+                    new_name += ".npy"
+                
+                output_path = os.path.join(mask_dir, new_name)
+                np.save(output_path, merged_mask)
+                self._update_mask_list()
+                QMessageBox.information(self, "Merge Masks", f"Merged mask saved as {new_name}")
+
     def _asset_clicked(self, item):
         name = item.text()
         self.image_handler.toggle_visibility(name)
@@ -1678,6 +1752,130 @@ class MainWindow(QMainWindow):
         self.viewer_view.set_pixmap(self.cached_composite)
         
         self.bg_label.lower()
+
+    def _package_data(self):
+        if not self.working_dir:
+            QMessageBox.warning(self, "Package Data", "Please select a working directory first.")
+            return
+
+        image_names = self.asset_manager.get_image_list()
+        mask_dir = os.path.join(self.working_dir, "Cluster Masks")
+        masks = []
+        if os.path.exists(mask_dir):
+            masks = [f for f in os.listdir(mask_dir) if f.lower().endswith(".npy")]
+
+        graph_dir = os.path.join(self.working_dir, "Graphs")
+        histograms = []
+        if os.path.exists(graph_dir):
+            # We want only histograms
+            histograms = [f for f in os.listdir(graph_dir) if (f.startswith("Hist_") or f.startswith("Hist_Overlay_")) and f.endswith(".png")]
+
+        dialog = PackageDataDialog(image_names, masks, histograms, self)
+        if dialog.exec() == QDialog.Accepted:
+            selected_images, selected_masks, selected_hists = dialog.get_selections()
+            
+            output_path, _ = QFileDialog.getSaveFileName(
+                self, "Save Packaged Data", self.working_dir, "JSON Files (*.json)"
+            )
+            
+            if not output_path:
+                return
+
+            if not output_path.lower().endswith('.json'):
+                output_path += '.json'
+
+            try:
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+                self.statusBar().showMessage("Packaging data...")
+
+                # Load project metadata if it exists
+                project_metadata = {}
+                image_names = self.asset_manager.get_image_list()
+                if image_names and project_manager:
+                    project_metadata = project_manager.get_project_metadata(self.working_dir, image_names)
+
+                # Prepare images
+                pkg_images = []
+                for name in selected_images:
+                    asset = self.asset_manager.get_image_by_name(name)
+                    if asset:
+                        pkg_images.append({"name": name, "path": asset.path})
+
+                # Prepare masks
+                pkg_masks = []
+                for name in selected_masks:
+                    path = os.path.join(mask_dir, name)
+                    pkg_masks.append({"name": name, "path": path})
+
+                # Prepare histograms
+                pkg_hists = []
+                for name in selected_hists:
+                    # Try to find corresponding measurements JSON
+                    # Old: Hist_Image_Mask.png -> Measurements_Mask.json
+                    # New: MaskName_Probe.png -> Measurements_MaskName.npy.json? 
+                    # Actually histogram_plots still uses mask_name for saving measurements.
+                    
+                    # Heuristic to find the mask name from the histogram name
+                    # Histogram name is <Mask Name>_<Probe>.png
+                    h_base = os.path.splitext(name)[0]
+                    h_parts = h_base.split('_')
+                    if len(h_parts) >= 2:
+                        mask_name_part = "_".join(h_parts[:-1])
+                        probe_part = h_parts[-1]
+                    else:
+                        mask_name_part = h_base
+                        probe_part = "Unknown"
+
+                    # Check project_metadata first
+                    hist_info = project_metadata.get("histograms", {}).get(h_base)
+                    if hist_info:
+                        mask_name_part = hist_info.get("mask_used", mask_name_part)
+
+                    json_name = f"Measurements_{mask_name_part}.json"
+                    # If mask_name_part doesn't have .npy but measurements were saved with it
+                    if not os.path.exists(os.path.join(graph_dir, json_name)):
+                         json_name = f"Measurements_{mask_name_part}.npy.json"
+                    
+                    json_path = os.path.join(graph_dir, json_name)
+                    
+                    found_data = None
+                    source_image = None
+                    source_mask = mask_name_part
+
+                    if os.path.exists(json_path):
+                        with open(json_path, 'r') as f:
+                            measurements = json.load(f)
+                            # Find image that matches the probe
+                            for img_name, data in measurements.items():
+                                img_parts = img_name.split('_')
+                                img_probe = img_parts[5].split('.')[0] if len(img_parts) >= 6 else ""
+                                if img_probe == probe_part or img_name == name:
+                                    found_data = np.array(data)
+                                    source_image = img_name
+                                    break
+                            
+                            if found_data is None and measurements:
+                                # Fallback to first one
+                                first_img = list(measurements.keys())[0]
+                                found_data = np.array(measurements[first_img])
+                                source_image = first_img
+
+                    if found_data is not None:
+                        pkg_hists.append({
+                            "name": name,
+                            "data": found_data,
+                            "source_image": source_image,
+                            "source_mask": source_mask
+                        })
+
+                package_data_to_json(output_path, pkg_images, pkg_masks, pkg_hists, project_metadata=project_metadata)
+                self.statusBar().showMessage(f"Data packaged successfully to {output_path}", 5000)
+                QMessageBox.information(self, "Package Data", f"Data packaged successfully to {output_path}")
+
+            except Exception as e:
+                QMessageBox.critical(self, "Package Data Error", f"An error occurred: {str(e)}")
+            finally:
+                QApplication.restoreOverrideCursor()
 
     def _create_status_bar(self):
         self.statusBar().showMessage("Ready")

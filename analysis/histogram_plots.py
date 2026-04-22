@@ -32,11 +32,15 @@ def create_histograms(measurements, mask_name, output_dir):
         plt.xlabel("Intensity")
         plt.ylabel("Frequency")
         
-        # Clean up image_name for filename
-        safe_image_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in image_name])
+        # Extract probe from image name: <Sample>_<Slide ##>_<Owner Initials>_<ObjectiveMag>_<Well Position>_<Probe>
+        parts = image_name.split('_')
+        probe = parts[5].split('.')[0] if len(parts) >= 6 else "Unknown"
+        
+        # Clean up mask_name for filename
         safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in mask_name])
         
-        hist_filename = f"Hist_{safe_image_name}_{safe_mask_name}.png"
+        # New naming convention: <Mask Name>_<Probe>
+        hist_filename = f"{safe_mask_name}_{probe}.png"
         hist_path = os.path.join(output_dir, hist_filename)
         plt.savefig(hist_path)
         plt.close()

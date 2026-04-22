@@ -6,6 +6,18 @@ import cv2
 import qimage2ndarray
 from PySide6.QtGui import QImage, QPixmap
 
+try:
+    from Data_Organization import project_manager
+    create_project_json = project_manager.create_project_json
+except ImportError:
+    try:
+        import sys
+        sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), "Data Organization"))
+        import project_manager
+        create_project_json = project_manager.create_project_json
+    except ImportError:
+        def create_project_json(path, images): pass
+
 class TransformPipeline:
     def __init__(self, config=None):
         self.config = config or {
@@ -193,6 +205,8 @@ class AssetManager:
         os.makedirs(os.path.join(json_dir, "Image JSONs"), exist_ok=True)
         
         self.scan_assets()
+        images = [f for f in os.listdir(path) if f.lower().endswith(('.tif', '.tiff', '.png', '.bmp', '.jpg', '.jpeg'))]
+        create_project_json(path, images)
 
     def scan_assets(self):
         if not self.working_dir:

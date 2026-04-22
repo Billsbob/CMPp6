@@ -609,3 +609,48 @@ class MaskPropertiesDialog(QDialog):
         buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
 
+class PackageDataDialog(QDialog):
+    def __init__(self, images, masks, histograms, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Package Data Parameters")
+        self.images = images
+        self.masks = masks
+        self.histograms = histograms
+        self.setup_ui()
+
+    def setup_ui(self):
+        self.resize(400, 500)
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel("Select Images:"))
+        self.image_list = QListWidget()
+        self.image_list.setSelectionMode(QListWidget.MultiSelection)
+        for img in self.images:
+            self.image_list.addItem(img)
+        layout.addWidget(self.image_list)
+
+        layout.addWidget(QLabel("Select Masks:"))
+        self.mask_list = QListWidget()
+        self.mask_list.setSelectionMode(QListWidget.MultiSelection)
+        for mask in self.masks:
+            self.mask_list.addItem(mask)
+        layout.addWidget(self.mask_list)
+
+        layout.addWidget(QLabel("Select Histograms:"))
+        self.hist_list = QListWidget()
+        self.hist_list.setSelectionMode(QListWidget.MultiSelection)
+        for hist in self.histograms:
+            self.hist_list.addItem(hist)
+        layout.addWidget(self.hist_list)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_selections(self):
+        selected_images = [item.text() for item in self.image_list.selectedItems()]
+        selected_masks = [item.text() for item in self.mask_list.selectedItems()]
+        selected_hists = [item.text() for item in self.hist_list.selectedItems()]
+        return selected_images, selected_masks, selected_hists
+
