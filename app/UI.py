@@ -27,8 +27,9 @@ from .widgets import ZoomableView
 from .dialogs import (
     FilterParameterDialog, ClusterParameterDialog, ISODATAParameterDialog,
     GMMParameterDialog, ThresholdParameterDialog, JointPlotDialog,
-    RefineMaskDialog, MaskPropertiesDialog, PackageDataDialog
+    RefineMaskDialog, MaskPropertiesDialog, PackageDataDialog, ImageStatsDialog
 )
+from analysis import image_stats
 from data_packaging.data_packager import package_data_to_json
 try:
     from Data_Organization import project_manager
@@ -49,7 +50,12 @@ class MainWindow(QMainWindow):
         self.asset_manager = AssetManager()
         self.image_handler = ImageDisplayHandler()
         self.working_dir = None
-        self.cached_composite = None
+        
+        # Caching
+        self.cached_composite = None # Final view (images + masks)
+        self.cached_image_composite = None # Images only
+        self.mask_cache = {} # path -> np.array
+        
         self.visible_masks = set()
         self.mask_opacity = 0.5
         self.preview_mask = None
@@ -326,9 +332,17 @@ class MainWindow(QMainWindow):
         properties_table_action.triggered.connect(self._show_mask_properties)
         mask_menu.addAction(properties_table_action)
 
+        measure_action = QAction("Measure", self)
+        measure_action.triggered.connect(self._measure_all_images)
+        mask_menu.addAction(measure_action)
+
         package_data_action = QAction("Package Data", self)
         package_data_action.triggered.connect(self._package_data)
         menu_bar.addAction(package_data_action)
+
+        compare_action = QAction("Compare", self)
+        compare_action.triggered.connect(self._compare_images)
+        menu_bar.addAction(compare_action)
         
     def _home_triggered(self):
         directory = QFileDialog.getExistingDirectory(self, "Select Working Directory")
@@ -342,6 +356,7 @@ class MainWindow(QMainWindow):
             self._update_graph_list()
             self._refresh_viewer()
             self.bg_label.lower()
+            self._measure_all_images()
 
     def _import_image(self):
         if not self.working_dir:
@@ -786,7 +801,7 @@ class MainWindow(QMainWindow):
             self._update_graph_list()
             self._show_graphs_window()
 
-    def _on_clustering_finished(self, cluster_mask, mask_root_name, n_clusters, stats_csv_path, params, algorithm):
+    def _on_clustering_finished(self, cluster_mask, mask_root_name, n_clusters, stats_csv_path, params, algorithm, image_names):
         try:
             mask_dir = os.path.join(self.working_dir, "Cluster Masks")
             os.makedirs(mask_dir, exist_ok=True)
@@ -801,10 +816,6 @@ class MainWindow(QMainWindow):
             # Standard: <Sample>_<Slide ##>_<Owner Initials>_<ObjectiveMag>_<Well Position>_<Probe>
             probes = []
             image_list = self.asset_manager.get_image_list() # Just for reference if needed
-            # We need the image_names used for clustering. 
-            # They are available in the worker but we don't pass them back yet.
-            # Actually they are in self.clustering_worker.image_names
-            image_names = self.clustering_worker.image_names
             
             for i, mask in enumerate(individual_masks):
                 new_mask_name = f"{initials}_{i+1:02d}"
@@ -887,6 +898,9 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("Running K-Means...")
                 QApplication.setOverrideCursor(Qt.WaitCursor)
                 
+                # Measure image stack before clustering
+                self._measure_clustered_images(image_names)
+                
                 graph_dir = os.path.join(self.working_dir, "Graphs")
                 os.makedirs(graph_dir, exist_ok=True)
 
@@ -959,6 +973,9 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("Running Gaussian Mixture...")
                 QApplication.setOverrideCursor(Qt.WaitCursor)
                 
+                # Measure image stack before clustering
+                self._measure_clustered_images(image_names)
+                
                 graph_dir = os.path.join(self.working_dir, "Graphs")
                 os.makedirs(graph_dir, exist_ok=True)
 
@@ -1030,6 +1047,9 @@ class MainWindow(QMainWindow):
             try:
                 self.statusBar().showMessage("Running ISODATA...")
                 QApplication.setOverrideCursor(Qt.WaitCursor)
+                
+                # Measure image stack before clustering
+                self._measure_clustered_images(image_names)
                 
                 graph_dir = os.path.join(self.working_dir, "Graphs")
                 os.makedirs(graph_dir, exist_ok=True)
@@ -1225,11 +1245,13 @@ class MainWindow(QMainWindow):
             self.visible_masks.remove(mask_name)
         else:
             self.visible_masks.add(mask_name)
+        # Only invalidate final composite, keep image composite
         self.cached_composite = None
         self._refresh_viewer()
 
     def _opacity_changed(self, value):
         self.mask_opacity = value / 100.0
+        # Only invalidate final composite
         self.cached_composite = None
         self._refresh_viewer()
 
@@ -1392,7 +1414,7 @@ class MainWindow(QMainWindow):
     def _change_color(self, name, color_name, is_mask=False):
         if is_mask:
             self.image_handler.set_asset_color(name, color_name)
-            self.cached_composite = None
+            self.cached_composite = None # Only invalidate final
             self._refresh_viewer()
             return
 
@@ -1401,6 +1423,7 @@ class MainWindow(QMainWindow):
             asset.pipeline.config["color"] = color_name
             asset.save_project()
             self.cached_composite = None
+            self.cached_image_composite = None # Invalidate image composite
             self._update_asset_list()
             self._refresh_viewer()
 
@@ -1408,6 +1431,7 @@ class MainWindow(QMainWindow):
         asset.pipeline.config[key] = not asset.pipeline.config.get(key, False)
         asset.save_project()
         self.cached_composite = None
+        self.cached_image_composite = None # Invalidate image composite
         self._update_asset_list()
         self._refresh_viewer()
 
@@ -1556,12 +1580,14 @@ class MainWindow(QMainWindow):
                 self.image_handler.toggle_visibility(item.text())
             item.setSelected(True)
         self.cached_composite = None
+        self.cached_image_composite = None
         self._refresh_viewer()
 
     def _select_none_images(self):
         self.image_list.clearSelection()
         self.image_handler.clear()
         self.cached_composite = None
+        self.cached_image_composite = None
         self._refresh_viewer()
 
     def _delete_selected_images(self):
@@ -1574,6 +1600,7 @@ class MainWindow(QMainWindow):
                 self.image_handler.remove_asset(name)
             self._update_asset_list()
             self.cached_composite = None
+            self.cached_image_composite = None
             self._refresh_viewer()
 
     def _select_all_masks(self):
@@ -1600,6 +1627,7 @@ class MainWindow(QMainWindow):
                 path = os.path.join(mask_dir, name)
                 if os.path.exists(path):
                     os.remove(path)
+                    if path in self.mask_cache: del self.mask_cache[path]
                 if name in self.visible_masks:
                     self.visible_masks.remove(name)
             self._update_mask_list()
@@ -1670,6 +1698,7 @@ class MainWindow(QMainWindow):
         name = item.text()
         self.image_handler.toggle_visibility(name)
         self.cached_composite = None
+        self.cached_image_composite = None
         self._refresh_viewer()
 
     def _refresh_viewer(self):
@@ -1680,31 +1709,39 @@ class MainWindow(QMainWindow):
             return
 
         if self.cached_composite is None:
-            self.cached_composite = self.image_handler.render_composite(self.asset_manager)
+            # Use image composite cache
+            if self.cached_image_composite is None:
+                self.cached_image_composite = self.image_handler.render_composite(self.asset_manager)
             
-            # Overlay masks
-            if (self.visible_masks and self.working_dir) or self.preview_mask is not None:
-                if self.cached_composite is None:
-                    # If no images, we need a blank slate based on mask size
-                    if self.preview_mask is not None:
-                        h, w = self.preview_mask.shape
-                    else:
-                        first_mask_path = os.path.join(self.working_dir, "Cluster Masks", list(self.visible_masks)[0])
-                        if os.path.exists(first_mask_path):
-                            m = np.load(first_mask_path)
-                            h, w = m.shape
+            # Start with image composite or blank
+            if self.cached_image_composite is None:
+                # If no images, we need a blank slate based on mask size
+                if self.preview_mask is not None:
+                    h, w = self.preview_mask.shape
+                elif self.visible_masks and self.working_dir:
+                    mask_path = os.path.join(self.working_dir, "Cluster Masks", list(self.visible_masks)[0])
+                    if mask_path not in self.mask_cache:
+                        if os.path.exists(mask_path):
+                            self.mask_cache[mask_path] = np.load(mask_path)
                         else:
                             return
-                    composite_rgb = np.zeros((h, w, 3), dtype=np.uint8)
+                    h, w = self.mask_cache[mask_path].shape
                 else:
-                    # Use qimage2ndarray to convert QImage to numpy RGB safely
-                    composite_rgb = qimage2ndarray.rgb_view(self.cached_composite).copy()
+                    return
+                composite_rgb = np.zeros((h, w, 3), dtype=np.uint8)
+            else:
+                composite_rgb = qimage2ndarray.rgb_view(self.cached_image_composite).copy()
 
+            # Overlay masks
+            if (self.visible_masks and self.working_dir) or self.preview_mask is not None:
                 if self.visible_masks and self.working_dir:
                     for mask_name in sorted(self.visible_masks):
                         mask_path = os.path.join(self.working_dir, "Cluster Masks", mask_name)
                         if os.path.exists(mask_path):
-                            mask = np.load(mask_path)
+                            if mask_path not in self.mask_cache:
+                                self.mask_cache[mask_path] = np.load(mask_path)
+                            mask = self.mask_cache[mask_path]
+                            
                             if mask.shape != composite_rgb.shape[:2]:
                                 mask = cv2.resize(mask, (composite_rgb.shape[1], composite_rgb.shape[0]), interpolation=cv2.INTER_NEAREST)
                             
@@ -1748,6 +1785,9 @@ class MainWindow(QMainWindow):
                 
                 # Convert back to QImage
                 self.cached_composite = qimage2ndarray.array2qimage(composite_rgb).copy()
+            else:
+                # If no masks, final composite IS the image composite
+                self.cached_composite = self.cached_image_composite
 
         self.viewer_view.set_pixmap(self.cached_composite)
         
@@ -1876,6 +1916,79 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Package Data Error", f"An error occurred: {str(e)}")
             finally:
                 QApplication.restoreOverrideCursor()
+
+    def _measure_all_images(self):
+        if not self.working_dir:
+            return
+        image_names = self.asset_manager.get_image_list()
+        if not image_names:
+            return
+        self._run_measurements(image_names, "All Img Stats")
+
+    def _measure_clustered_images(self, image_names):
+        if not self.working_dir or not image_names:
+            return
+        self._run_measurements(image_names, "Img Stack")
+
+    def _compare_images(self):
+        if not self.working_dir:
+            QMessageBox.warning(self, "Compare", "Please select a working directory first.")
+            return
+
+        selected_items = self.image_list.selectedItems()
+        if not selected_items:
+            image_names = list(self.image_handler.visible_assets)
+        else:
+            image_names = [item.text() for item in selected_items]
+
+        if not image_names:
+            QMessageBox.warning(self, "Compare", "No images selected or visible to compare.")
+            return
+
+        try:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            self.statusBar().showMessage("Running pairwise similarity diagnostic...")
+            
+            stack = image_stacker.load_and_stack_images(self.asset_manager, image_names)
+            if stack is None:
+                QMessageBox.critical(self, "Compare", "Failed to create image stack.")
+                return
+
+            image_stats.diagnose_pairwise_similarity(stack)
+            self.statusBar().showMessage("Pairwise similarity diagnostic completed (see console).", 5000)
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Compare Error", f"An error occurred: {str(e)}")
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _run_measurements(self, image_names, base_name):
+        try:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            self.statusBar().showMessage(f"Calculating measurements for {base_name}...")
+            
+            if base_name == "Img Stack":
+                df = image_stats.calculate_stack_stats(self.asset_manager, image_names)
+            else:
+                df = image_stats.calculate_image_stats(self.asset_manager, image_names)
+
+            if df.empty:
+                self.statusBar().showMessage(f"No data for {base_name}.", 5000)
+                return
+
+            graph_dir = os.path.join(self.working_dir, "Graphs")
+            image_stats.save_stats_and_graphs(df, graph_dir, base_name)
+            
+            self._update_graph_list()
+            self.statusBar().showMessage(f"Measurements for {base_name} completed.", 5000)
+            
+            dialog = ImageStatsDialog(df, title=f"Statistics: {base_name}", parent=self)
+            dialog.exec()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Measurement Error", f"An error occurred: {str(e)}")
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def _create_status_bar(self):
         self.statusBar().showMessage("Ready")

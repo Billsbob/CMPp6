@@ -70,7 +70,7 @@ class ClusterParameterDialog(QDialog):
             "n_clusters": 8,
             "max_iter": 300,
             "init": "k-means++",
-            "n_init": 10,
+            "n_init": 3,
             "random_state": 0,
             "algorithm": "auto",
             "normalize": False,
@@ -292,7 +292,7 @@ class GMMParameterDialog(QDialog):
         self.mask_names = mask_names or []
         self.params = {
             "n_components": 8,
-            "covariance_type": "full",
+            "covariance_type": "diag",
             "tol": 1e-3,
             "max_iter": 100,
             "random_state": 0,
@@ -653,4 +653,37 @@ class PackageDataDialog(QDialog):
         selected_masks = [item.text() for item in self.mask_list.selectedItems()]
         selected_hists = [item.text() for item in self.hist_list.selectedItems()]
         return selected_images, selected_masks, selected_hists
+
+class ImageStatsDialog(QDialog):
+    def __init__(self, stats_df, title="Image Statistics", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.stats_df = stats_df
+        self.setup_ui()
+
+    def setup_ui(self):
+        self.resize(1000, 500)
+        layout = QVBoxLayout(self)
+
+        self.table = QTableWidget()
+        cols = self.stats_df.columns.tolist()
+        self.table.setColumnCount(len(cols))
+        self.table.setHorizontalHeaderLabels(cols)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        
+        self.table.setRowCount(len(self.stats_df))
+        for i, row in self.stats_df.iterrows():
+            for j, col in enumerate(cols):
+                val = row[col]
+                if isinstance(val, float):
+                    item = QTableWidgetItem(f"{val:.4f}")
+                else:
+                    item = QTableWidgetItem(str(val))
+                self.table.setItem(i, j, item)
+
+        layout.addWidget(self.table)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons.accepted.connect(self.accept)
+        layout.addWidget(buttons)
 

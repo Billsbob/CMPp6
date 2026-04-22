@@ -40,7 +40,7 @@ def _apply_normalization(stack, normalize_stack=False, normalize=False):
                 stack[i] = np.zeros_like(img)
     return stack
 
-def kmeans_clustering(stack, n_clusters=8, max_iter=300, init='k-means++', n_init=10, random_state=None, algorithm='auto', normalize=False, tol=1e-4, normalize_stack=False, mask=None, border_mask_width=6, include_coords=False, x_weight=1.0, y_weight=1.0):
+def kmeans_clustering(stack, n_clusters=8, max_iter=300, init='k-means++', n_init=3, random_state=None, algorithm='auto', normalize=False, tol=1e-4, normalize_stack=False, mask=None, border_mask_width=6, include_coords=False, x_weight=1.0, y_weight=1.0):
     """
     Perform k-means clustering on an image stack.
     
@@ -138,7 +138,7 @@ def kmeans_clustering(stack, n_clusters=8, max_iter=300, init='k-means++', n_ini
     
     return cluster_mask
 
-def gaussian_mixture_clustering(stack, n_components=8, covariance_type='full', tol=1e-3, max_iter=100, random_state=None, normalize=False, normalize_stack=False, mask=None, border_mask_width=6, include_coords=False, x_weight=1.0, y_weight=1.0):
+def gaussian_mixture_clustering(stack, n_components=8, covariance_type='diag', tol=1e-3, max_iter=100, random_state=None, normalize=False, normalize_stack=False, mask=None, border_mask_width=6, include_coords=False, x_weight=1.0, y_weight=1.0):
     """
     Perform Gaussian Mixture Model clustering on an image stack.
     
@@ -213,6 +213,19 @@ def gaussian_mixture_clustering(stack, n_components=8, covariance_type='full', t
         max_iter=max_iter,
         random_state=random_state
     )
+    
+    # Debug information before GMM fit
+    print("--- GMM Debug Info ---")
+    print(f"Stack shape: {stack.shape}")
+    print(f"Stack dtype: {stack.dtype}")
+    print(f"Stack min: {stack.min()}, max: {stack.max()}")
+    print(f"Any NaN: {np.isnan(data_to_cluster).any()}")
+    print(f"Any Inf: {np.isinf(data_to_cluster).any()}")
+    print(f"Number of pixels after mask: {data_to_cluster.shape[0]}")
+    print(f"Number of unique values (first channel): {len(np.unique(data_to_cluster[:, 0]))}")
+    print(f"Covariance type: {covariance_type}")
+    print(f"Number of components: {n_components}")
+    print("----------------------")
     
     labels = gmm.fit_predict(data_to_cluster)
     

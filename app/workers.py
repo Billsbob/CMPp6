@@ -4,7 +4,7 @@ import clustering
 from clustering import cluster_statistics
 
 class ClusteringWorker(QObject):
-    finished = Signal(object, str, int, object, dict, str)  # result_mask, mask_root_name, n_clusters, stats_info, params, algorithm
+    finished = Signal(object, str, int, object, dict, str, list)  # result_mask, mask_root_name, n_clusters, stats_info, params, algorithm, image_names
     error = Signal(str)
 
     def __init__(self, algorithm, stack, mask, params, mask_root_name, image_names=None, output_dir=None):
@@ -65,6 +65,6 @@ class ClusteringWorker(QObject):
                     self.image_names, self.output_dir, mask=self.mask
                 )
             
-            self.finished.emit(result_mask, self.mask_root_name, n_clusters, stats_csv_path, original_params, self.algorithm)
+            self.finished.emit(result_mask, self.mask_root_name, n_clusters, stats_csv_path, original_params, self.algorithm, self.image_names)
         except Exception as e:
             self.error.emit(str(e))

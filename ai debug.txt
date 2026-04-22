@@ -1,0 +1,120 @@
+## Yes — here’s the most likely culprit order, plus a minimal isolation test
+
+If GMM works on raw images but fails after preprocessing, the usual suspects are:
+
+### Most likely preprocessing changes
+1. **Invert**
+2. **Crop**
+3. **Rotate with expand**
+4. **Blur / median / mean / sharpen**
+5. **Normalization or contrast-like scaling if it sneaks into the clustering path**
+6. **Masking after transforms**
+
+---
+
+## Why these matter
+
+### 1) Invert
+Invert changes the intensity distribution but usually not the variance.
+It’s less likely to break GMM by itself unless combined with smoothing or clipping.
+
+### 2) Crop
+Crop can create a much more uniform region than the full image, especially if the ROI is tight.
+
+### 3) Rotate with expand
+Rotation with expansion can introduce:
+- interpolated pixels
+- edge padding
+- slightly different value distributions
+
+That can matter a lot for covariance estimation.
+
+### 4) Blur / median / mean / sharpen
+These are the biggest suspects.
+
+They can:
+- reduce local variance
+- make channels more correlated
+- flatten regions into near-duplicate values
+
+That is exactly the kind of change that makes GMM unstable.
+
+### 5) Masking
+A mask can turn a healthy image stack into a very narrow feature cloud if it selects mostly homogeneous tissue.
+
+---
+
+## Minimal test to isolate the bad step
+
+Use the same 12-image stack and test GMM after each preprocessing stage.
+
+### Test sequence
+Run GMM on:
+
+1. **raw images only**
+2. **after invert**
+3. **after crop**
+4. **after rotate**
+5. **after blur**
+6. **after full preprocessing pipeline**
+
+The first stage where GMM fails is the one to investigate.
+
+---
+
+## Even smaller and faster version
+
+If you want the quickest diagnostic, test these 4 cases:
+
+- **Case A:** raw
+- **Case B:** raw + invert
+- **Case C:** raw + invert + crop
+- **Case D:** full pipeline
+
+If A works and D fails, but B/C still work, then the likely cause is the filter or rotation stage.
+
+---
+
+## Best “binary search” approach
+
+Instead of testing every step one by one, split the pipeline:
+
+### Group 1
+- invert
+- crop
+- rotate
+
+### Group 2
+- blur
+- median
+- mean
+- sharpen
+- unsharp
+
+Test:
+
+- raw
+- group 1 only
+- group 2 only
+- full pipeline
+
+If group 1 works and group 2 fails, you’ve found the problem class.
+
+---
+
+## My strongest guess
+
+Given your symptoms, the most likely offender is:
+
+> **a smoothing or resampling operation reducing feature variance enough to make GMM numerically unstable**
+
+That would also fit:
+- high pairwise correlation
+- healthy-looking per-image std
+- failure only after preprocessing
+
+---
+
+## Practical next step
+
+If you want, I can help you draft a **tiny debug routine** that prints GMM pass/fail after each pipeline stage so you can identify the exact step in one run.
