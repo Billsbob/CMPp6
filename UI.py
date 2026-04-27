@@ -115,11 +115,15 @@ class MainWindow(QMainWindow):
         self.save_masks_btn = QPushButton("Save")
         self.save_masks_btn.setFixedWidth(60)
         self.save_masks_btn.clicked.connect(self._save_visible_masks)
+        self.merge_masks_btn = QPushButton("Merge\nMasks")
+        self.merge_masks_btn.setFixedWidth(60)
+        self.merge_masks_btn.clicked.connect(self._merge_selected_masks)
         
         mask_btn_layout.addWidget(self.select_all_masks_btn)
         mask_btn_layout.addWidget(self.select_none_masks_btn)
         mask_btn_layout.addWidget(self.delete_masks_btn)
         mask_btn_layout.addWidget(self.save_masks_btn)
+        mask_btn_layout.addWidget(self.merge_masks_btn)
         mask_btn_layout.addStretch()
 
         self.mask_list = QListWidget()
@@ -275,10 +279,6 @@ class MainWindow(QMainWindow):
         export_images_action = QAction("Export Modified Images", self)
         export_images_action.triggered.connect(self._export_modified_images)
         tools_menu.addAction(export_images_action)
-
-        stack_action = QAction("Stack Images", self)
-        stack_action.triggered.connect(self._stack_images)
-        tools_menu.addAction(stack_action)
 
         threshold_mask_action = QAction("Mask From Threshold", self)
         threshold_mask_action.triggered.connect(self._create_threshold_mask)
@@ -1478,29 +1478,6 @@ class MainWindow(QMainWindow):
             cv2.imwrite(os.path.join(out_dir, name), data)
         QMessageBox.information(self, "Export", "Images exported successfully.")
 
-    def _stack_images(self):
-        if not self.working_dir: return
-        
-        selected_items = self.image_list.selectedItems()
-        if not selected_items:
-            # If nothing selected, use all visible
-            image_names = list(self.image_handler.visible_assets)
-        else:
-            image_names = [item.text() for item in selected_items]
-            
-        if not image_names:
-            QMessageBox.warning(self, "Stacking", "No images selected or visible to stack.")
-            return
-
-        stack = image_stacker.load_and_stack_images(self.asset_manager, image_names)
-        
-        if stack is not None:
-            save_path, _ = QFileDialog.getSaveFileName(self, "Save Stack", self.working_dir, "Numpy Stack (*.npy)")
-            if save_path:
-                image_stacker.save_stack(stack, save_path)
-                QMessageBox.information(self, "Stacking", f"Successfully created stack with shape: {stack.shape} and saved to {save_path}")
-        else:
-            QMessageBox.critical(self, "Stacking", "Failed to create stack. Check console for details (possible dimension mismatch).")
 
     def _save_visible(self):
         if not self.working_dir: return
@@ -1591,6 +1568,51 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "Save Masks", f"Visible masks saved to {file_path}")
             else:
                 QMessageBox.critical(self, "Save Masks", "Failed to save the image.")
+
+    def _merge_selected_masks(self):
+        selected_items = self.mask_list.selectedItems()
+        if len(selected_items) < 2:
+            QMessageBox.warning(self, "Merge Masks", "Please select at least two masks to merge.")
+            return
+
+        if not self.working_dir:
+            return
+
+        new_name, ok = QInputDialog.getText(self, "Merge Masks", "Enter name for the new mask:")
+        if not ok or not new_name.strip():
+            return
+
+        if not new_name.endswith(".npy"):
+            new_name += ".npy"
+
+        mask_dir = os.path.join(self.working_dir, "Cluster Masks")
+        output_path = os.path.join(mask_dir, new_name)
+
+        if os.path.exists(output_path):
+            if QMessageBox.question(self, "Overwrite", f"File {new_name} already exists. Overwrite?", 
+                                    QMessageBox.Yes | QMessageBox.No) == QMessageBox.No:
+                return
+
+        try:
+            merged_mask = None
+            for item in selected_items:
+                mask_path = os.path.join(mask_dir, item.text())
+                mask = np.load(mask_path)
+                
+                if merged_mask is None:
+                    merged_mask = mask.astype(bool)
+                else:
+                    if mask.shape != merged_mask.shape:
+                        mask = cv2.resize(mask.astype(np.uint8), 
+                                          (merged_mask.shape[1], merged_mask.shape[0]), 
+                                          interpolation=cv2.INTER_NEAREST).astype(bool)
+                    merged_mask = np.logical_or(merged_mask, mask.astype(bool))
+
+            np.save(output_path, merged_mask.astype(np.uint8))
+            self._update_mask_list()
+            QMessageBox.information(self, "Merge Masks", f"Successfully merged masks into {new_name}")
+        except Exception as e:
+            QMessageBox.critical(self, "Merge Masks Error", f"An error occurred while merging masks: {str(e)}")
 
     def _asset_clicked(self, item):
         name = item.text()
