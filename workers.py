@@ -1,4 +1,7 @@
 import numpy as np
+import os
+import json
+import datetime
 from PySide6.QtCore import QObject, Signal
 import clustering
 
@@ -18,6 +21,9 @@ class ClusteringWorker(QObject):
 
     def run(self):
         try:
+            # Save debug log before clustering
+            self._save_debug_log()
+
             # Extract coordinate parameters
             include_coords = self.params.pop("include_coords", False)
             x_weight = self.params.pop("x_weight", 1.0)
@@ -65,3 +71,64 @@ class ClusteringWorker(QObject):
             self.finished.emit(result_mask, self.mask_root_name, n_clusters, stats_csv_path)
         except Exception as e:
             self.error.emit(str(e))
+
+    def _save_debug_log(self):
+        if self.stack is None:
+            return
+
+        try:
+            # Working directory is the parent of the output_dir (Graphs)
+            if self.output_dir:
+                working_dir = os.path.dirname(self.output_dir)
+                json_dir = os.path.join(working_dir, "JSON")
+            else:
+                # Fallback if output_dir is not set
+                json_dir = "JSON"
+
+            os.makedirs(json_dir, exist_ok=True)
+
+            # Determine number of pixels after mask
+            if self.mask is not None:
+                # If mask is RGB, convert to grayscale
+                mask_data = self.mask
+                if len(mask_data.shape) == 3:
+                    mask_data = np.max(mask_data, axis=2)
+                num_pixels_after_mask = int(np.sum(mask_data > 0))
+            else:
+                num_pixels_after_mask = int(np.prod(self.stack.shape[1:]))
+
+            # Unique values (this can be slow for large stacks, but it's a debug log)
+            # Use a subset of pixels if the stack is too large to speed up np.unique?
+            # For now, just do it as requested.
+            # Convert to float64 for unique if needed, but float32 should be fine.
+            num_unique_values = int(len(np.unique(self.stack)))
+
+            # Number of components/clusters
+            # For ISODATA, it's n_clusters, for GMM it's n_components, for KMeans it's n_clusters
+            num_components = self.params.get("n_clusters") or self.params.get("n_components") or "N/A"
+            
+            # Covariance type
+            covariance_type = self.params.get("covariance_type", "N/A")
+
+            stats = {
+                "stack.shape": list(self.stack.shape),
+                "stack.dtype": str(self.stack.dtype),
+                "stack.min": float(np.min(self.stack)),
+                "stack.max": float(np.max(self.stack)),
+                "has_nan": bool(np.isnan(self.stack).any()),
+                "has_inf": bool(np.isinf(self.stack).any()),
+                "num_pixels_after_mask": num_pixels_after_mask,
+                "num_unique_values": num_unique_values,
+                "covariance_type": covariance_type,
+                "num_components": num_components,
+                "algorithm": self.algorithm,
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+
+            filename = f"debug_log_{self.algorithm}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            output_path = os.path.join(json_dir, filename)
+
+            with open(output_path, 'w') as f:
+                json.dump(stats, f, indent=4)
+        except Exception as e:
+            print(f"Error saving debug log: {e}")
