@@ -1,0 +1,47 @@
+
+==================== STEP: Navigating to home folder and scanning assets ====================
+Time: 2026-04-27 16:49:12.112822
+Working Directory: C:\Users\ERK220\PycharmProjects\CMPp6\Test Folder\13907_R1
+Images found: ['13907_R1_EAK_20X_01_YY.tif', '13907_R1_EAK_20X_02_G.tif', '13907_R1_EAK_20X_03_E.tif', '13907_R1_EAK_20X_04_TT.tif', '13907_R1_EAK_20X_05_Qb.tif', '13907_R1_EAK_20X_06_D.tif', '13907_R1_EAK_20X_07_J.tif', '13907_R1_EAK_20X_08_O.tif', '13907_R1_EAK_20X_09_R.tif', '13907_R1_EAK_20X_10_P.tif', '13907_R1_EAK_20X_11_L.tif', '13907_R1_EAK_20X_12_TT.tif']
+
+==================== STEP: Inverting all images ====================
+Time: 2026-04-27 16:49:12.114048
+Inverted image: 13907_R1_EAK_20X_01_YY.tif
+Inverted image: 13907_R1_EAK_20X_02_G.tif
+Inverted image: 13907_R1_EAK_20X_03_E.tif
+Inverted image: 13907_R1_EAK_20X_04_TT.tif
+Inverted image: 13907_R1_EAK_20X_05_Qb.tif
+Inverted image: 13907_R1_EAK_20X_06_D.tif
+Inverted image: 13907_R1_EAK_20X_07_J.tif
+Inverted image: 13907_R1_EAK_20X_08_O.tif
+Inverted image: 13907_R1_EAK_20X_09_R.tif
+Inverted image: 13907_R1_EAK_20X_10_P.tif
+Inverted image: 13907_R1_EAK_20X_11_L.tif
+Inverted image: 13907_R1_EAK_20X_12_TT.tif
+
+==================== STEP: Running GMM clustering (n_components=4) ====================
+Time: 2026-04-27 16:49:12.123746
+GMM clustering completed. Result mask shape: (471, 1059)
+Full cluster mask saved to: C:\Users\ERK220\PycharmProjects\CMPp6\Test Folder\13907_R1\Cluster Masks\troubleshoot_gmm.npy
+
+==================== STEP: Creating histograms for each cluster mask ====================
+Time: 2026-04-27 16:49:19.732394
+
+Processing Cluster 1
+Generated 12 individual histograms.
+Generated overlaid histogram: Hist_Overlay_troubleshoot_gmm_cluster_1.npy.png
+
+Processing Cluster 2
+Generated 12 individual histograms.
+Generated overlaid histogram: Hist_Overlay_troubleshoot_gmm_cluster_2.npy.png
+
+Processing Cluster 3
+Generated 12 individual histograms.
+Generated overlaid histogram: Hist_Overlay_troubleshoot_gmm_cluster_3.npy.png
+
+Processing Cluster 4
+Generated 12 individual histograms.
+Generated overlaid histogram: Hist_Overlay_troubleshoot_gmm_cluster_4.npy.png
+
+==================== STEP: Workflow completed successfully ====================
+Time: 2026-04-27 16:50:20.207489
