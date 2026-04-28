@@ -193,6 +193,34 @@ class AssetManager:
         os.makedirs(os.path.join(json_dir, "Image JSONs"), exist_ok=True)
         
         self.scan_assets()
+        self._create_project_json()
+
+    def _create_project_json(self):
+        if not self.working_dir or not self.images:
+            return
+
+        # Collect IDs (filenames)
+        image_ids = sorted(list(self.images.keys()))
+        
+        # Find Sample and Slide from first image
+        # Standard: <Sample>_<Slide ##>_<Owner Initials>_<ObjectiveMag>_<Well Position>_<Probe>
+        first_img = image_ids[0]
+        parts = first_img.split('_')
+        if len(parts) >= 2:
+            project_name = f"{parts[0]}_{parts[1]}.json"
+        else:
+            project_name = "project.json"
+
+        project_data = {
+            "project_name": project_name.replace(".json", ""),
+            "image_ids": image_ids,
+            "masks": {},
+            "histograms": {}
+        }
+
+        json_path = os.path.join(self.working_dir, "JSON", project_name)
+        with open(json_path, 'w') as f:
+            json.dump(project_data, f, indent=4)
 
     def scan_assets(self):
         if not self.working_dir:

@@ -14,13 +14,13 @@ def create_histograms(measurements, mask_name, output_dir):
         output_dir (str): Directory to save the histogram images.
         
     Returns:
-        list of str: List of filenames of the generated histograms.
+        list of tuple: List of (filename, image_name) of the generated histograms.
     """
     if not measurements:
         return []
     
     os.makedirs(output_dir, exist_ok=True)
-    generated_files = []
+    generated_info = []
     
     for image_name, values in measurements.items():
         if len(values) == 0:
@@ -32,17 +32,24 @@ def create_histograms(measurements, mask_name, output_dir):
         plt.xlabel("Intensity")
         plt.ylabel("Frequency")
         
-        # Clean up image_name for filename
-        safe_image_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in image_name])
-        safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in mask_name])
+        # New naming convention: <Mask Name>_<Well Number>_<Probe>
+        # mask_name is like "KM_01.npy" -> "KM_01"
+        # image_name is like "14184_01_ZE_20X_01_YY.tif" -> "01_YY"
+        safe_mask_name = os.path.splitext(mask_name)[0]
         
-        hist_filename = f"Hist_{safe_image_name}_{safe_mask_name}.png"
+        img_parts = os.path.splitext(image_name)[0].split('_')
+        if len(img_parts) >= 6:
+            well_probe = f"{img_parts[4]}_{img_parts[5]}"
+        else:
+            well_probe = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in image_name])
+            
+        hist_filename = f"{safe_mask_name}_{well_probe}.png"
         hist_path = os.path.join(output_dir, hist_filename)
         plt.savefig(hist_path)
         plt.close()
-        generated_files.append(hist_filename)
+        generated_info.append((hist_filename, image_name))
         
-    return generated_files
+    return generated_info
 
 def create_overlaid_histogram(measurements, mask_name, output_dir):
     """

@@ -242,6 +242,10 @@ class MainWindow(QMainWindow):
         import_mask_action.triggered.connect(self._import_mask)
         file_menu.addAction(import_mask_action)
 
+        package_project_action = QAction("Package Project", self)
+        package_project_action.triggered.connect(self._package_project)
+        file_menu.addAction(package_project_action)
+
         tools_menu = menu_bar.addMenu("Tools")
         
         invert_action = QAction("Invert All", self)
@@ -327,6 +331,65 @@ class MainWindow(QMainWindow):
             self._update_graph_list()
             self._refresh_viewer()
             self.bg_label.lower()
+
+    def _package_project(self):
+        if not self.working_dir:
+            QMessageBox.warning(self, "Package Project", "Please select a working directory first.")
+            return
+
+        try:
+            # 1. Update project JSON with latest image list
+            project_file = self._get_project_json_path()
+            if os.path.exists(project_file):
+                with open(project_file, 'r') as f:
+                    project_data = json.load(f)
+            else:
+                # If project JSON doesn't exist, create it (should have been created at set_working_dir)
+                project_name = "project.json"
+                if self.asset_manager.images:
+                    first_img = sorted(list(self.asset_manager.images.keys()))[0]
+                    parts = first_img.split('_')
+                    if len(parts) >= 2:
+                        project_name = f"{parts[0]}_{parts[1]}.json"
+                
+                project_data = {
+                    "project_name": project_name.replace(".json", ""),
+                    "image_ids": [],
+                    "masks": {},
+                    "histograms": {}
+                }
+                os.makedirs(os.path.join(self.working_dir, "JSON"), exist_ok=True)
+                project_file = os.path.join(self.working_dir, "JSON", project_name)
+
+            # Refresh image IDs
+            project_data["image_ids"] = sorted([self._get_image_id(img) for img in self.asset_manager.images.keys()])
+            
+            with open(project_file, 'w') as f:
+                json.dump(project_data, f, indent=4)
+
+            # 2. Ask user for save location
+            save_path, _ = QFileDialog.getSaveFileName(self, "Save Packaged Project", 
+                                                       os.path.join(os.path.expanduser("~"), "Packaged_Project.zip"),
+                                                       "ZIP Files (*.zip)")
+            if not save_path:
+                return
+
+            self.statusBar().showMessage("Packaging project...")
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+
+            # 3. Zip the entire working directory
+            import shutil
+            # Remove extension if user added .zip, because make_archive adds it
+            base_name = os.path.splitext(save_path)[0]
+            shutil.make_archive(base_name, 'zip', self.working_dir)
+
+            QApplication.restoreOverrideCursor()
+            self.statusBar().showMessage(f"Project packaged to {os.path.basename(save_path)}", 5000)
+            QMessageBox.information(self, "Package Project", f"Project successfully packaged to:\n{save_path}")
+
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "Package Project Error", f"Failed to package project: {str(e)}")
 
     def _import_image(self):
         if not self.working_dir:
@@ -465,11 +528,34 @@ class MainWindow(QMainWindow):
                 return
 
             graph_dir = os.path.join(self.working_dir, "Graphs")
-            histogram_plots.create_histograms(measurements, mask_name, graph_dir)
+            hist_files = histogram_plots.create_histograms(measurements, mask_name, graph_dir)
             histogram_plots.create_overlaid_histogram(measurements, mask_name, graph_dir)
             export_plot_utils.save_measurements_json(measurements, mask_name, graph_dir)
 
             self.statusBar().showMessage("Graphing completed.", 3000)
+            # Link in project JSON
+            project_file = self._get_project_json_path()
+            if project_file and os.path.exists(project_file):
+                with open(project_file, 'r') as f:
+                    project_data = json.load(f)
+                
+                if "histograms" not in project_data:
+                    project_data["histograms"] = {}
+                
+                # We need info about mask metadata
+                mask_info = project_data.get("masks", {}).get(mask_name, {})
+
+                for hist_file, img_name in hist_files:
+                    project_data["histograms"][hist_file] = {
+                        "mask_used": mask_name,
+                        "image_used": self._get_image_id(img_name),
+                        "cluster_method": mask_info.get("cluster_method", "N/A"),
+                        "cluster_parameters": mask_info.get("cluster_parameters", {})
+                    }
+                
+                with open(project_file, 'w') as f:
+                    json.dump(project_data, f, indent=4)
+
             self._update_graph_list()
             self._show_graphs_window()
         except Exception as e:
@@ -767,16 +853,41 @@ class MainWindow(QMainWindow):
             self._update_graph_list()
             self._show_graphs_window()
 
-    def _on_clustering_finished(self, cluster_mask, mask_root_name, n_clusters, stats_csv_path):
+    def _on_clustering_finished(self, cluster_mask, mask_root_name, n_clusters, stats_csv_path, method, params):
         try:
             mask_dir = os.path.join(self.working_dir, "Cluster Masks")
             os.makedirs(mask_dir, exist_ok=True)
 
             individual_masks = clustering.get_individual_masks(cluster_mask, n_clusters)
+            
+            # Link to images used
+            image_names = list(self.image_handler.visible_assets) # Default if none selected
+            selected_items = self.image_list.selectedItems()
+            if selected_items:
+                image_names = [item.text() for item in selected_items]
+
+            project_file = self._get_project_json_path()
+            project_data = {}
+            if os.path.exists(project_file):
+                with open(project_file, 'r') as f:
+                    project_data = json.load(f)
 
             for i, mask in enumerate(individual_masks):
                 new_mask_name = f"{mask_root_name}_{i+1:02d}.npy"
                 np.save(os.path.join(mask_dir, new_mask_name), mask)
+                
+                # Link in JSON
+                if "masks" not in project_data:
+                    project_data["masks"] = {}
+                
+                project_data["masks"][new_mask_name] = {
+                    "images": [self._get_image_id(img) for img in image_names],
+                    "cluster_method": method,
+                    "cluster_parameters": params
+                }
+
+            with open(project_file, 'w') as f:
+                json.dump(project_data, f, indent=4)
 
             msg = "Clustering completed."
             if stats_csv_path:
@@ -798,6 +909,29 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'clustering_thread'):
             self.clustering_thread.quit()
             self.clustering_thread.wait()
+
+    def _get_project_json_path(self):
+        if not self.working_dir:
+            return None
+        
+        # Try to find existing project json
+        json_dir = os.path.join(self.working_dir, "JSON")
+        if os.path.exists(json_dir):
+            for f in os.listdir(json_dir):
+                if f.endswith(".json") and "_" in f:
+                    return os.path.join(json_dir, f)
+        
+        # Fallback
+        return os.path.join(json_dir, "project.json")
+
+    def _get_image_id(self, image_name):
+        # image_name is like "14184_01_ZE_20X_01_YY.tif"
+        # well position and probe are indices 4 and 5 (0-based)
+        base = os.path.splitext(image_name)[0]
+        parts = base.split('_')
+        if len(parts) >= 6:
+            return f"{parts[4]}_{parts[5]}"
+        return base
 
     def _run_kmeans(self):
         if hasattr(self, 'clustering_thread') and self.clustering_thread.isRunning():
@@ -846,7 +980,7 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     QMessageBox.warning(self, "K-Means", f"Failed to load mask: {str(e)}")
             else:
-                mask_root_name = "k"
+                mask_root_name = "KM"
             
             try:
                 self.statusBar().showMessage("Running K-Means...")
@@ -918,7 +1052,7 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     QMessageBox.warning(self, "Gaussian Mixture", f"Failed to load mask: {str(e)}")
             else:
-                mask_root_name = "gm"
+                mask_root_name = "GM"
 
             try:
                 self.statusBar().showMessage("Running Gaussian Mixture...")
@@ -990,7 +1124,7 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     QMessageBox.warning(self, "ISODATA", f"Failed to load mask: {str(e)}")
             else:
-                mask_root_name = "I"
+                mask_root_name = "IS"
 
             try:
                 self.statusBar().showMessage("Running ISODATA...")
