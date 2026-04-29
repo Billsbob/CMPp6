@@ -154,10 +154,10 @@ class MainWindow(QMainWindow):
         self.delete_graphs_btn = QPushButton("Delete")
         self.delete_graphs_btn.setFixedWidth(60)
         self.delete_graphs_btn.clicked.connect(self._delete_selected_graphs)
-        self.save_graphs_btn = QPushButton("Save")
+        self.save_graphs_btn = QPushButton("Save\nPNG")
         self.save_graphs_btn.setFixedWidth(60)
         self.save_graphs_btn.clicked.connect(self._save_selected_graphs)
-        self.export_graphs_btn = QPushButton("Export")
+        self.export_graphs_btn = QPushButton("Export\nCSV")
         self.export_graphs_btn.setFixedWidth(60)
         self.export_graphs_btn.clicked.connect(self._export_selected_graphs)
         
@@ -422,7 +422,7 @@ class MainWindow(QMainWindow):
             return
         graph_dir = os.path.join(self.working_dir, "Graphs")
         if os.path.exists(graph_dir):
-            graphs = [f for f in os.listdir(graph_dir) if (f.startswith("Hist_") or f.startswith("Hist_Overlay_") or f.startswith("JointPlot_")) and f.endswith(".png")]
+            graphs = [f for f in os.listdir(graph_dir) if (f.endswith(".png") and not f.startswith("JointPlot_")) or f.startswith("JointPlot_")]
             try:
                 graphs.sort()
             except:
@@ -466,7 +466,6 @@ class MainWindow(QMainWindow):
 
             graph_dir = os.path.join(self.working_dir, "Graphs")
             histogram_plots.create_histograms(measurements, mask_name, graph_dir)
-            histogram_plots.create_overlaid_histogram(measurements, mask_name, graph_dir)
             export_plot_utils.save_measurements_json(measurements, mask_name, graph_dir)
 
             self.statusBar().showMessage("Graphing completed.", 3000)
@@ -604,38 +603,55 @@ class MainWindow(QMainWindow):
         else:
             # Multi-selection - create a combined histogram
             items_measurements = []
+            
+            # Group selected graphs by their potential mask names to minimize JSON loading
+            # Mask names are derived from the filenames of the JSONs in the Graphs directory
+            mask_to_measurements = {}
+            if os.path.exists(graph_dir):
+                for f in os.listdir(graph_dir):
+                    if f.startswith("Measurements_") and f.endswith(".json"):
+                        mask_name_from_json = f[len("Measurements_"):-len(".json")]
+                        try:
+                            with open(os.path.join(graph_dir, f), 'r') as jf:
+                                mask_to_measurements[mask_name_from_json] = json.load(jf)
+                        except:
+                            pass
+
             for item in selected_graphs:
                 name = item.text()
-                # Try to parse the name: Hist_<image>_<mask_no_ext>.png
-                # Or Hist_Overlay_<mask_no_ext>.png
-                if name.startswith("Hist_Overlay_"):
-                    # For overlays, we'd need to load all images for that mask.
-                    # But the user might want specific individual graphs.
-                    # Let's see if we can extract measurements for each selected item.
-                    pass
-                elif name.startswith("Hist_"):
-                    # Pattern: Hist_ImageName_MaskName.png
-                    # This is tricky because image name and mask name can contain underscores.
-                    # Let's try to find matching JSON files and extract data.
-                    # Actually, a better way is to iterate through all JSONs in Graphs dir.
+                if name.startswith("JointPlot_"):
+                    continue
+                
+                found = False
+                for mask_name, measurements in mask_to_measurements.items():
+                    # Check if this graph filename belongs to this mask
+                    # New convention: <Mask Name>_<Well Position>_<Probe>.png
+                    # Old convention: Hist_<Image Name>_<Mask Name>.png
+                    # Overlaid: <Mask Name>_Overlay.png or Hist_Overlay_<Mask Name>.png
                     
-                    # For now, let's assume we can find the image name and mask name.
-                    # A more robust way:
-                    found = False
-                    for f in os.listdir(graph_dir):
-                        if f.startswith("Measurements_") and f.endswith(".json"):
-                            mask_part = f[len("Measurements_"):-len(".json")]
-                            if mask_part in name:
-                                with open(os.path.join(graph_dir, f), 'r') as jf:
-                                    measurements = json.load(jf)
-                                    # Find which image matches this name
-                                    for img_name, values in measurements.items():
-                                        safe_img = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in img_name])
-                                        if safe_img in name:
-                                            items_measurements.append((img_name, values))
-                                            found = True
-                                            break
-                            if found: break
+                    if mask_name in name:
+                        for img_name, values in measurements.items():
+                            # Create safe version of image name used in filenames
+                            safe_img = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in img_name])
+                            
+                            # For individual histograms
+                            if safe_img in name:
+                                items_measurements.append((f"{img_name} ({mask_name})", values))
+                                found = True
+                                break
+                            
+                            # For new naming convention <Mask Name>_<Well Position>_<Probe>.png
+                            # we need to check if Well Position and Probe match
+                            parts = safe_img.split('_')
+                            if len(parts) >= 6:
+                                well_pos = parts[4]
+                                probe = os.path.splitext(parts[5])[0]
+                                if f"_{well_pos}_{probe}" in name:
+                                    items_measurements.append((f"{img_name} ({mask_name})", values))
+                                    found = True
+                                    break
+                        
+                        if found: break
             
             if items_measurements:
                 combined_rgb = histogram_plots.create_dynamic_overlaid_histogram(items_measurements)
@@ -652,7 +668,7 @@ class MainWindow(QMainWindow):
         if not self.working_dir: return
         selected = self.graph_list.selectedItems()
         if not selected:
-            QMessageBox.warning(self, "Save", "No graphs selected.")
+            QMessageBox.warning(self, "Save PNG", "No graphs selected.")
             return
 
         path, _ = QFileDialog.getSaveFileName(self, "Save Combined Histogram", "", "PNG (*.png)")
@@ -663,33 +679,56 @@ class MainWindow(QMainWindow):
             # Just copy the file
             import shutil
             shutil.copy(os.path.join(graph_dir, selected[0].text()), path)
-            QMessageBox.information(self, "Save", f"Graph saved to {path}")
+            QMessageBox.information(self, "Save PNG", f"Graph saved to {path}")
         else:
             # Create and save combined
             items_measurements = []
-            for item in selected:
-                name = item.text()
+            
+            mask_to_measurements = {}
+            if os.path.exists(graph_dir):
                 for f in os.listdir(graph_dir):
                     if f.startswith("Measurements_") and f.endswith(".json"):
-                        mask_part = f[len("Measurements_"):-len(".json")]
-                        if mask_part in name:
+                        mask_name_from_json = f[len("Measurements_"):-len(".json")]
+                        try:
                             with open(os.path.join(graph_dir, f), 'r') as jf:
-                                measurements = json.load(jf)
-                                for img_name, values in measurements.items():
-                                    safe_img = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in img_name])
-                                    if safe_img in name:
-                                        items_measurements.append((img_name, values))
-                                        break
+                                mask_to_measurements[mask_name_from_json] = json.load(jf)
+                        except:
+                            pass
+
+            for item in selected:
+                name = item.text()
+                if name.startswith("JointPlot_"):
+                    continue
+
+                found = False
+                for mask_name, measurements in mask_to_measurements.items():
+                    if mask_name in name:
+                        for img_name, values in measurements.items():
+                            safe_img = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in img_name])
+                            if safe_img in name:
+                                items_measurements.append((f"{img_name} ({mask_name})", values))
+                                found = True
+                                break
+                            
+                            parts = safe_img.split('_')
+                            if len(parts) >= 6:
+                                well_pos = parts[4]
+                                probe = os.path.splitext(parts[5])[0]
+                                if f"_{well_pos}_{probe}" in name:
+                                    items_measurements.append((f"{img_name} ({mask_name})", values))
+                                    found = True
+                                    break
+                        if found: break
                 
             if items_measurements:
                 histogram_plots.create_dynamic_overlaid_histogram(items_measurements, output_path=path)
-                QMessageBox.information(self, "Save", f"Combined histogram saved to {path}")
+                QMessageBox.information(self, "Save PNG", f"Combined histogram saved to {path}")
 
     def _export_selected_graphs(self):
         if not self.working_dir: return
         selected = self.graph_list.selectedItems()
         if not selected:
-            QMessageBox.warning(self, "Export", "No graphs selected.")
+            QMessageBox.warning(self, "Export CSV", "No graphs selected.")
             return
 
         path, _ = QFileDialog.getSaveFileName(self, "Export Raw Values", "", "CSV (*.csv)")
@@ -697,25 +736,45 @@ class MainWindow(QMainWindow):
 
         graph_dir = os.path.join(self.working_dir, "Graphs")
         items_measurements = []
-        for item in selected:
-            name = item.text()
+        
+        mask_to_measurements = {}
+        if os.path.exists(graph_dir):
             for f in os.listdir(graph_dir):
                 if f.startswith("Measurements_") and f.endswith(".json"):
-                    mask_part = f[len("Measurements_"):-len(".json")]
-                    if mask_part in name:
-                        try:
-                            with open(os.path.join(graph_dir, f), 'r') as jf:
-                                measurements = json.load(jf)
-                                for img_name, values in measurements.items():
-                                    safe_img = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in img_name])
-                                    if safe_img in name:
-                                        items_measurements.append((img_name, values))
-                                        break
-                        except Exception as e:
-                            print(f"Error reading {f}: {e}")
+                    mask_name_from_json = f[len("Measurements_"):-len(".json")]
+                    try:
+                        with open(os.path.join(graph_dir, f), 'r') as jf:
+                            mask_to_measurements[mask_name_from_json] = json.load(jf)
+                    except:
+                        pass
+
+        for item in selected:
+            name = item.text()
+            if name.startswith("JointPlot_"):
+                continue
+
+            found = False
+            for mask_name, measurements in mask_to_measurements.items():
+                if mask_name in name:
+                    for img_name, values in measurements.items():
+                        safe_img = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in img_name])
+                        if safe_img in name:
+                            items_measurements.append((f"{img_name} ({mask_name})", values))
+                            found = True
+                            break
+                        
+                        parts = safe_img.split('_')
+                        if len(parts) >= 6:
+                            well_pos = parts[4]
+                            probe = os.path.splitext(parts[5])[0]
+                            if f"_{well_pos}_{probe}" in name:
+                                items_measurements.append((f"{img_name} ({mask_name})", values))
+                                found = True
+                                break
+                    if found: break
 
         if not items_measurements:
-            QMessageBox.warning(self, "Export", "Could not find raw data for selected graphs.")
+            QMessageBox.warning(self, "Export CSV", "Could not find raw data for selected graphs.")
             return
 
         try:
@@ -738,7 +797,7 @@ class MainWindow(QMainWindow):
                             row.append("")
                     writer.writerow(row)
             
-            QMessageBox.information(self, "Export", f"Raw values exported to {path}")
+            QMessageBox.information(self, "Export CSV", f"Raw values exported to {path}")
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"An error occurred: {str(e)}")
 
@@ -767,16 +826,63 @@ class MainWindow(QMainWindow):
             self._update_graph_list()
             self._show_graphs_window()
 
-    def _on_clustering_finished(self, cluster_mask, mask_root_name, n_clusters, stats_csv_path):
+    def _on_clustering_finished(self, cluster_mask, mask_root_name, n_clusters, stats_csv_path, algorithm=None, params=None, image_names=None):
         try:
             mask_dir = os.path.join(self.working_dir, "Cluster Masks")
             os.makedirs(mask_dir, exist_ok=True)
 
             individual_masks = clustering.get_individual_masks(cluster_mask, n_clusters)
 
+            # Prepare metadata for linking in project JSON
+            # Image info: <Well Position>_<Probe>
+            source_images_info = []
+            if image_names:
+                for img_name in image_names:
+                    parts = img_name.split('_')
+                    if len(parts) >= 6:
+                        # <Sample>_<Slide ##>_<Owner Initials>_<ObjectiveMag>_<Well Position>_<Probe>
+                        # Indices: 0, 1, 2, 3, 4, 5
+                        # Strip extension from the last part
+                        probe = os.path.splitext(parts[5])[0]
+                        source_images_info.append(f"{parts[4]}_{probe}")
+                    else:
+                        source_images_info.append(img_name)
+
+            # Get project JSON path
+            image_list = self.asset_manager.get_image_list()
+            project_name = "project_"
+            if image_list:
+                parts = image_list[0].split('_')
+                if len(parts) >= 2:
+                    project_name = f"{parts[0]}_{parts[1]}_"
+            
+            json_dir = os.path.join(self.working_dir, "JSON")
+            project_json_path = os.path.join(json_dir, f"{project_name}.json")
+
+            project_data = {}
+            if os.path.exists(project_json_path):
+                try:
+                    with open(project_json_path, 'r') as f:
+                        project_data = json.load(f)
+                except:
+                    pass
+            
+            if "Masks" not in project_data:
+                project_data["Masks"] = {}
+
             for i, mask in enumerate(individual_masks):
                 new_mask_name = f"{mask_root_name}_{i+1:02d}.npy"
                 np.save(os.path.join(mask_dir, new_mask_name), mask)
+
+                # Link in project JSON
+                project_data["Masks"][new_mask_name] = {
+                    "source_images": source_images_info,
+                    "cluster_method": algorithm,
+                    "cluster_parameters": params
+                }
+
+            with open(project_json_path, 'w') as f:
+                json.dump(project_data, f, indent=4)
 
             msg = "Clustering completed."
             if stats_csv_path:
@@ -846,7 +952,7 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     QMessageBox.warning(self, "K-Means", f"Failed to load mask: {str(e)}")
             else:
-                mask_root_name = "k"
+                mask_root_name = "KM"
             
             try:
                 self.statusBar().showMessage("Running K-Means...")
@@ -863,7 +969,11 @@ class MainWindow(QMainWindow):
                 self.clustering_worker.moveToThread(self.clustering_thread)
                 
                 self.clustering_thread.started.connect(self.clustering_worker.run)
-                self.clustering_worker.finished.connect(self._on_clustering_finished)
+                self.clustering_worker.finished.connect(
+                    lambda mask, root, n, stats: self._on_clustering_finished(
+                        mask, root, n, stats, algorithm="kmeans", params=params, image_names=image_names
+                    )
+                )
                 self.clustering_worker.error.connect(self._on_clustering_error)
                 
                 self.clustering_thread.start()
@@ -918,7 +1028,7 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     QMessageBox.warning(self, "Gaussian Mixture", f"Failed to load mask: {str(e)}")
             else:
-                mask_root_name = "gm"
+                mask_root_name = "GM"
 
             try:
                 self.statusBar().showMessage("Running Gaussian Mixture...")
@@ -929,15 +1039,19 @@ class MainWindow(QMainWindow):
 
                 self.clustering_thread = QThread()
                 self.clustering_worker = ClusteringWorker(
-                    "gmm", stack, mask_to_use, params, mask_root_name,
+                    "gmm", stack, mask_to_use, params, mask_root_name, 
                     image_names=image_names, output_dir=graph_dir
                 )
                 self.clustering_worker.moveToThread(self.clustering_thread)
-
+                
                 self.clustering_thread.started.connect(self.clustering_worker.run)
-                self.clustering_worker.finished.connect(self._on_clustering_finished)
+                self.clustering_worker.finished.connect(
+                    lambda mask, root, n, stats: self._on_clustering_finished(
+                        mask, root, n, stats, algorithm="gmm", params=params, image_names=image_names
+                    )
+                )
                 self.clustering_worker.error.connect(self._on_clustering_error)
-
+                
                 self.clustering_thread.start()
             except Exception as e:
                 QMessageBox.critical(self, "GMM Error", f"An error occurred while starting clustering: {str(e)}")
@@ -990,7 +1104,7 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     QMessageBox.warning(self, "ISODATA", f"Failed to load mask: {str(e)}")
             else:
-                mask_root_name = "I"
+                mask_root_name = "IS"
 
             try:
                 self.statusBar().showMessage("Running ISODATA...")
@@ -1007,7 +1121,11 @@ class MainWindow(QMainWindow):
                 self.clustering_worker.moveToThread(self.clustering_thread)
 
                 self.clustering_thread.started.connect(self.clustering_worker.run)
-                self.clustering_worker.finished.connect(self._on_clustering_finished)
+                self.clustering_worker.finished.connect(
+                    lambda mask, root, n, stats: self._on_clustering_finished(
+                        mask, root, n, stats, algorithm="isodata", params=params, image_names=image_names
+                    )
+                )
                 self.clustering_worker.error.connect(self._on_clustering_error)
 
                 self.clustering_thread.start()

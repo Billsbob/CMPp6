@@ -55,6 +55,9 @@ def create_joint_kde_plot(all_measurements, output_dir, user_filename=None):
         t_img1 = truncate_image_name(m['image1_name'])
         t_img2 = truncate_image_name(m['image2_name'])
         mask_name = m['mask_name']
+        # Strip .npy from mask name if present
+        if mask_name.lower().endswith(".npy"):
+            mask_name = mask_name[:-4]
         # The user mentioned "image1 vs image2 under mask ##.npy, image3 vs image4 under mask ##.py"
         # We will follow this format for the description.
         descriptions.append(f"Set {i+1}: {t_img1} vs {t_img2} under {mask_name}")
@@ -127,7 +130,11 @@ def create_joint_kde_plot(all_measurements, output_dir, user_filename=None):
         m = all_measurements[0]
         safe_image1 = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in truncate_image_name(m['image1_name'])])
         safe_image2 = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in truncate_image_name(m['image2_name'])])
-        safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in m['mask_name']])
+        
+        mask_name = m['mask_name']
+        if mask_name.lower().endswith(".npy"):
+            mask_name = mask_name[:-4]
+        safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in mask_name])
         filename = f"JointPlot_{safe_image1}_vs_{safe_image2}_{safe_mask_name}.png"
     else:
         import time

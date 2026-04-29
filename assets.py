@@ -193,6 +193,44 @@ class AssetManager:
         os.makedirs(os.path.join(json_dir, "Image JSONs"), exist_ok=True)
         
         self.scan_assets()
+        self.update_project_json()
+
+    def update_project_json(self):
+        if not self.working_dir:
+            return
+
+        image_list = self.get_image_list()
+        if not image_list:
+            return
+
+        # Use the first image to determine the project name
+        # Convention: <Sample>_<Slide ##>_<Owner Initials>_<ObjectiveMag>_<Well Position>_<Probe>
+        first_image = image_list[0]
+        parts = first_image.split('_')
+        if len(parts) >= 2:
+            project_name = f"{parts[0]}_{parts[1]}_"
+        else:
+            project_name = os.path.basename(self.working_dir) + "_"
+
+        json_dir = os.path.join(self.working_dir, "JSON")
+        project_json_path = os.path.join(json_dir, f"{project_name}.json")
+
+        project_data = {}
+        if os.path.exists(project_json_path):
+            try:
+                with open(project_json_path, 'r') as f:
+                    project_data = json.load(f)
+            except:
+                project_data = {}
+
+        # Update Image IDs
+        project_data["Image IDs"] = image_list
+        
+        if "Masks" not in project_data:
+            project_data["Masks"] = {}
+
+        with open(project_json_path, 'w') as f:
+            json.dump(project_data, f, indent=4)
 
     def scan_assets(self):
         if not self.working_dir:

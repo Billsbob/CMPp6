@@ -16,6 +16,10 @@ def save_measurements_json(measurements, mask_name, output_dir):
         str: Path to the saved JSON file.
     """
     os.makedirs(output_dir, exist_ok=True)
+    # Strip .npy from mask name if present
+    if mask_name.lower().endswith(".npy"):
+        mask_name = mask_name[:-4]
+    
     safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in mask_name])
     json_filename = f"Measurements_{safe_mask_name}.json"
     json_path = os.path.join(output_dir, json_filename)
@@ -38,6 +42,10 @@ def save_group_csv(measurements, mask_name, output_dir):
         str: Path to the saved CSV file.
     """
     os.makedirs(output_dir, exist_ok=True)
+    # Strip .npy from mask name if present
+    if mask_name.lower().endswith(".npy"):
+        mask_name = mask_name[:-4]
+    
     safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in mask_name])
     csv_filename = f"Measurements_{safe_mask_name}.csv"
     csv_path = os.path.join(output_dir, csv_filename)

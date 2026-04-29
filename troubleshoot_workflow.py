@@ -118,9 +118,7 @@ def main():
             measurements = measure_utilities.calculate_mask_measurements(am, image_names, mask_path)
             if measurements:
                 hist_files = histogram_plots.create_histograms(measurements, mask_name, graph_dir)
-                overlay_file = histogram_plots.create_overlaid_histogram(measurements, mask_name, graph_dir)
                 print(f"Generated {len(hist_files)} individual histograms.")
-                print(f"Generated overlaid histogram: {overlay_file}")
             else:
                 print(f"WARNING: Failed to calculate measurements for cluster {cluster_id}")
 

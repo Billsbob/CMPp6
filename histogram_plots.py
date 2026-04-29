@@ -34,9 +34,26 @@ def create_histograms(measurements, mask_name, output_dir):
         
         # Clean up image_name for filename
         safe_image_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in image_name])
-        safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in mask_name])
         
-        hist_filename = f"Hist_{safe_image_name}_{safe_mask_name}.png"
+        # Strip .npy from mask name if present
+        temp_mask_name = mask_name
+        if temp_mask_name.lower().endswith(".npy"):
+            temp_mask_name = temp_mask_name[:-4]
+        safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in temp_mask_name])
+        
+        # Determine the name based on the convention <Mask Name>_<Well Position>_<Probe>
+        # Image name format: <Sample>_<Slide ##>_<Owner Initials>_<ObjectiveMag>_<Well Position>_<Probe>
+        parts = safe_image_name.split('_')
+        if len(parts) >= 6:
+            # Well Position is at index 4, Probe is at index 5
+            well_position = parts[4]
+            probe = parts[5]
+            # Remove extension from probe if it's the last part
+            probe = os.path.splitext(probe)[0]
+            hist_filename = f"{safe_mask_name}_{well_position}_{probe}.png"
+        else:
+            hist_filename = f"Hist_{safe_image_name}_{safe_mask_name}.png"
+        
         hist_path = os.path.join(output_dir, hist_filename)
         plt.savefig(hist_path)
         plt.close()
@@ -94,8 +111,12 @@ def create_overlaid_histogram(measurements, mask_name, output_dir):
     # Seaborn's histplot auto-scales Y, but let's ensure it's at least max_freq
     plt.ylim(0, max_freq * 1.1) # Add some margin
 
+    # Strip .npy from mask name if present
+    if mask_name.lower().endswith(".npy"):
+        mask_name = mask_name[:-4]
+    
     safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in mask_name])
-    hist_filename = f"Hist_Overlay_{safe_mask_name}.png"
+    hist_filename = f"{safe_mask_name}_Overlay.png"
     hist_path = os.path.join(output_dir, hist_filename)
     plt.savefig(hist_path)
     plt.close()
