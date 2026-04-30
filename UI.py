@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import cv2
 import json
+import scipy.stats
 import qimage2ndarray
 from assets import AssetManager
 from image_handler import ImageDisplayHandler
@@ -465,8 +466,93 @@ class MainWindow(QMainWindow):
                 return
 
             graph_dir = os.path.join(self.working_dir, "Graphs")
-            histogram_plots.create_histograms(measurements, mask_name, graph_dir)
-            export_plot_utils.save_measurements_json(measurements, mask_name, graph_dir)
+            hist_files = histogram_plots.create_histograms(measurements, mask_name, graph_dir)
+            json_measurements_path = export_plot_utils.save_measurements_json(measurements, mask_name, graph_dir)
+            csv_measurements_path = export_plot_utils.save_group_csv(measurements, mask_name, graph_dir)
+
+            # Update project JSON with histograms
+            image_list = self.asset_manager.get_image_list()
+            project_name = "project_"
+            if image_list:
+                parts = image_list[0].split('_')
+                if len(parts) >= 2:
+                    project_name = f"{parts[0]}_{parts[1]}_"
+            
+            json_dir = os.path.join(self.working_dir, "JSON")
+            project_json_path = os.path.join(json_dir, f"{project_name}.json")
+
+            project_data = {}
+            if os.path.exists(project_json_path):
+                try:
+                    with open(project_json_path, 'r') as f:
+                        project_data = json.load(f)
+                except:
+                    pass
+
+            if "Histograms" not in project_data:
+                project_data["Histograms"] = {}
+
+            # Find mask metadata if available
+            mask_metadata = project_data.get("Masks", {}).get(mask_name, {})
+            cluster_method = mask_metadata.get("cluster_method", "Unknown")
+
+            for hist_file in hist_files:
+                hist_path = os.path.join(graph_dir, hist_file)
+                
+                # We need to find the measurements for this specific histogram file
+                # measurements is a dict: {image_name: values}
+                # hist_files is a list of filenames like: <Mask Name>_<Well Position>_<Probe>.png
+                
+                stats = {
+                    "mean": 0.0, "median": 0.0, "std": 0.0, "skewness": 0.0, "kurtosis": 0.0,
+                    "q05": 0.0, "q25": 0.0, "q75": 0.0, "q95": 0.0, "entropy": 0.0
+                }
+                
+                # Match hist_file back to image_name to get values
+                for img_name, values in measurements.items():
+                    # Check if this img_name matches the hist_file
+                    safe_img = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in img_name])
+                    parts = safe_img.split('_')
+                    if len(parts) >= 6:
+                        well_pos = parts[4]
+                        probe = os.path.splitext(parts[5])[0]
+                        # mask_name might have .npy
+                        temp_mask = mask_name[:-4] if mask_name.lower().endswith(".npy") else mask_name
+                        safe_mask = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in temp_mask])
+                        
+                        expected_name = f"{safe_mask}_{well_pos}_{probe}.png"
+                        if hist_file == expected_name:
+                            v = np.array(values)
+                            if len(v) > 0:
+                                stats["mean"] = float(np.mean(v))
+                                stats["median"] = float(np.median(v))
+                                stats["std"] = float(np.std(v))
+                                stats["skewness"] = float(scipy.stats.skew(v))
+                                stats["kurtosis"] = float(scipy.stats.kurtosis(v))
+                                stats["q05"] = float(np.percentile(v, 5))
+                                stats["q25"] = float(np.percentile(v, 25))
+                                stats["q75"] = float(np.percentile(v, 75))
+                                stats["q95"] = float(np.percentile(v, 95))
+                                
+                                # Entropy: using histogram-based approach
+                                try:
+                                    counts, _ = np.histogram(v, bins='auto', density=True)
+                                    stats["entropy"] = float(scipy.stats.entropy(counts)) if len(counts) > 0 else 0.0
+                                except:
+                                    stats["entropy"] = 0.0
+                            break
+
+                project_data["Histograms"][hist_file] = {
+                    "path": os.path.abspath(hist_path),
+                    "linked_mask": mask_name,
+                    "cluster_method": cluster_method,
+                    "measurements_json": os.path.abspath(json_measurements_path),
+                    "measurements_csv": os.path.abspath(csv_measurements_path),
+                    **stats
+                }
+
+            with open(project_json_path, 'w') as f:
+                json.dump(project_data, f, indent=4)
 
             self.statusBar().showMessage("Graphing completed.", 3000)
             self._update_graph_list()
@@ -875,10 +961,13 @@ class MainWindow(QMainWindow):
                 np.save(os.path.join(mask_dir, new_mask_name), mask)
 
                 # Link in project JSON
+                mask_path = os.path.join(mask_dir, new_mask_name)
                 project_data["Masks"][new_mask_name] = {
+                    "path": os.path.abspath(mask_path),
                     "source_images": source_images_info,
                     "cluster_method": algorithm,
-                    "cluster_parameters": params
+                    "cluster_parameters": params,
+                    "statistics_csv": os.path.abspath(stats_csv_path) if stats_csv_path else None
                 }
 
             with open(project_json_path, 'w') as f:

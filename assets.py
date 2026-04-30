@@ -223,8 +223,15 @@ class AssetManager:
             except:
                 project_data = {}
 
-        # Update Image IDs
+        # Update Image IDs and Paths
         project_data["Image IDs"] = image_list
+        if "Image Paths" not in project_data:
+            project_data["Image Paths"] = {}
+        
+        for img_name in image_list:
+            asset = self.get_image_by_name(img_name)
+            if asset:
+                project_data["Image Paths"][img_name] = os.path.abspath(asset.path)
         
         if "Masks" not in project_data:
             project_data["Masks"] = {}
