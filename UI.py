@@ -457,12 +457,12 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            self.statusBar().showMessage("Calculating measurements and generating histograms...")
+            self.statusBar().showMessage("Calculating histogram data and generating histograms...")
             QApplication.setOverrideCursor(Qt.WaitCursor)
             
             measurements = measure_utilities.calculate_mask_measurements(self.asset_manager, image_names, mask_path)
             if not measurements:
-                QMessageBox.critical(self, "Graphing", "Failed to calculate measurements.")
+                QMessageBox.critical(self, "Graphing", "Failed to calculate histogram data.")
                 return
 
             graph_dir = os.path.join(self.working_dir, "Graphs")
@@ -546,8 +546,8 @@ class MainWindow(QMainWindow):
                     "path": os.path.abspath(hist_path),
                     "linked_mask": mask_name,
                     "cluster_method": cluster_method,
-                    "measurements_json": os.path.abspath(json_measurements_path),
-                    "measurements_csv": os.path.abspath(csv_measurements_path),
+                    "histograms_json": os.path.abspath(json_measurements_path),
+                    "histograms_csv": os.path.abspath(csv_measurements_path),
                     **stats
                 }
 
@@ -621,7 +621,7 @@ class MainWindow(QMainWindow):
                     })
 
                 if not all_measurements:
-                    QMessageBox.critical(self, "Joint KDE Plot", "Failed to calculate measurements for any of the selected sets.")
+                    QMessageBox.critical(self, "Joint KDE Plot", "Failed to calculate histogram data for any of the selected sets.")
                     return
 
                 graph_dir = os.path.join(self.working_dir, "Graphs")
@@ -695,8 +695,8 @@ class MainWindow(QMainWindow):
             mask_to_measurements = {}
             if os.path.exists(graph_dir):
                 for f in os.listdir(graph_dir):
-                    if f.startswith("Measurements_") and f.endswith(".json"):
-                        mask_name_from_json = f[len("Measurements_"):-len(".json")]
+                    if f.startswith("Histograms_") and f.endswith(".json"):
+                        mask_name_from_json = f[len("Histograms_"):-len(".json")]
                         try:
                             with open(os.path.join(graph_dir, f), 'r') as jf:
                                 mask_to_measurements[mask_name_from_json] = json.load(jf)
@@ -773,8 +773,8 @@ class MainWindow(QMainWindow):
             mask_to_measurements = {}
             if os.path.exists(graph_dir):
                 for f in os.listdir(graph_dir):
-                    if f.startswith("Measurements_") and f.endswith(".json"):
-                        mask_name_from_json = f[len("Measurements_"):-len(".json")]
+                    if f.startswith("Histograms_") and f.endswith(".json"):
+                        mask_name_from_json = f[len("Histograms_"):-len(".json")]
                         try:
                             with open(os.path.join(graph_dir, f), 'r') as jf:
                                 mask_to_measurements[mask_name_from_json] = json.load(jf)
@@ -826,8 +826,8 @@ class MainWindow(QMainWindow):
         mask_to_measurements = {}
         if os.path.exists(graph_dir):
             for f in os.listdir(graph_dir):
-                if f.startswith("Measurements_") and f.endswith(".json"):
-                    mask_name_from_json = f[len("Measurements_"):-len(".json")]
+                if f.startswith("Histograms_") and f.endswith(".json"):
+                    mask_name_from_json = f[len("Histograms_"):-len(".json")]
                     try:
                         with open(os.path.join(graph_dir, f), 'r') as jf:
                             mask_to_measurements[mask_name_from_json] = json.load(jf)

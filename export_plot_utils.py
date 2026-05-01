@@ -21,7 +21,7 @@ def save_measurements_json(measurements, mask_name, output_dir):
         mask_name = mask_name[:-4]
     
     safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in mask_name])
-    json_filename = f"Measurements_{safe_mask_name}.json"
+    json_filename = f"Histograms_{safe_mask_name}.json"
     json_path = os.path.join(output_dir, json_filename)
     
     with open(json_path, 'w') as f:
@@ -47,7 +47,7 @@ def save_group_csv(measurements, mask_name, output_dir):
         mask_name = mask_name[:-4]
     
     safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in mask_name])
-    csv_filename = f"Measurements_{safe_mask_name}.csv"
+    csv_filename = f"Histograms_{safe_mask_name}.csv"
     csv_path = os.path.join(output_dir, csv_filename)
     
     # Create a DataFrame from measurements

@@ -227,11 +227,14 @@ class AssetManager:
         project_data["Image IDs"] = image_list
         if "Image Paths" not in project_data:
             project_data["Image Paths"] = {}
+        if "Image JSON Paths" not in project_data:
+            project_data["Image JSON Paths"] = {}
         
         for img_name in image_list:
             asset = self.get_image_by_name(img_name)
             if asset:
                 project_data["Image Paths"][img_name] = os.path.abspath(asset.path)
+                project_data["Image JSON Paths"][img_name] = os.path.abspath(asset.get_json_path())
         
         if "Masks" not in project_data:
             project_data["Masks"] = {}
