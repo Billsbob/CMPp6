@@ -1,5 +1,6 @@
 import os
 import json
+import numpy as np
 import pandas as pd
 import shutil
 
@@ -29,9 +30,37 @@ def save_measurements_json(measurements, mask_name, output_dir):
         
     return json_path
 
+def get_safe_histogram_name(image_name, mask_name):
+    """
+    Generate a name following the convention <Mask Name>_<Well Position>_<Probe>
+    based on the image name and mask name.
+    """
+    # Clean up image_name
+    safe_image_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in image_name])
+    
+    # Strip .npy from mask name if present
+    temp_mask_name = mask_name
+    if temp_mask_name.lower().endswith(".npy"):
+        temp_mask_name = temp_mask_name[:-4]
+    safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in temp_mask_name])
+    
+    # Image name format: <Sample>_<Slide ##>_<Owner Initials>_<ObjectiveMag>_<Well Position>_<Probe>
+    parts = safe_image_name.split('_')
+    if len(parts) >= 6:
+        sample = parts[0]
+        slide = parts[1]
+        well_position = parts[4]
+        probe = parts[5]
+        # Remove extension from probe if it's the last part
+        probe = os.path.splitext(probe)[0]
+        return f"{sample}_{slide}_{safe_mask_name}_{well_position}_{probe}"
+    else:
+        return f"{safe_mask_name}_{safe_image_name}"
+
 def save_group_csv(measurements, mask_name, output_dir):
     """
-    Save measurements as a CSV file where each column is an image.
+    Save measurements as a CSV file where rows are intensity values (0-255)
+    and columns are the frequency of pixels at each intensity for each image.
     
     Args:
         measurements (dict): Image name to ROI intensity values.
@@ -50,11 +79,21 @@ def save_group_csv(measurements, mask_name, output_dir):
     csv_filename = f"Histograms_{safe_mask_name}.csv"
     csv_path = os.path.join(output_dir, csv_filename)
     
-    # Create a DataFrame from measurements
-    # Note: different images might have different number of pixels if masks were different,
-    # but here they use the same mask, so lengths should be equal.
-    # If not, it will pad with NaN.
-    df = pd.DataFrame(dict([ (k,pd.Series(v)) for k,v in measurements.items() ]))
+    # Create a dictionary for frequencies
+    # Initialize with all intensities 0-255
+    hist_data = {"Intensity": list(range(256))}
+    
+    for img_name, values in measurements.items():
+        column_header = get_safe_histogram_name(img_name, mask_name)
+        if len(values) > 0:
+            # Calculate frequency for each intensity (0-255)
+            # We assume values are in range 0-255. If not, np.histogram handles it.
+            counts, _ = np.histogram(values, bins=range(257))
+            hist_data[column_header] = counts
+        else:
+            hist_data[column_header] = [0] * 256
+            
+    df = pd.DataFrame(hist_data)
     df.to_csv(csv_path, index=False)
     
     return csv_path

@@ -509,41 +509,51 @@ class MainWindow(QMainWindow):
                 }
                 
                 # Match hist_file back to image_name to get values
+                sample_name = "Unknown"
+                slide_number = "Unknown"
+                well_position = "Unknown"
+                probe_name = "Unknown"
+                
                 for img_name, values in measurements.items():
                     # Check if this img_name matches the hist_file
-                    safe_img = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in img_name])
-                    parts = safe_img.split('_')
-                    if len(parts) >= 6:
-                        well_pos = parts[4]
-                        probe = os.path.splitext(parts[5])[0]
-                        # mask_name might have .npy
-                        temp_mask = mask_name[:-4] if mask_name.lower().endswith(".npy") else mask_name
-                        safe_mask = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in temp_mask])
-                        
-                        expected_name = f"{safe_mask}_{well_pos}_{probe}.png"
-                        if hist_file == expected_name:
-                            v = np.array(values)
-                            if len(v) > 0:
-                                stats["mean"] = float(np.mean(v))
-                                stats["median"] = float(np.median(v))
-                                stats["std"] = float(np.std(v))
-                                stats["skewness"] = float(scipy.stats.skew(v))
-                                stats["kurtosis"] = float(scipy.stats.kurtosis(v))
-                                stats["q05"] = float(np.percentile(v, 5))
-                                stats["q25"] = float(np.percentile(v, 25))
-                                stats["q75"] = float(np.percentile(v, 75))
-                                stats["q95"] = float(np.percentile(v, 95))
-                                
-                                # Entropy: using histogram-based approach
-                                try:
-                                    counts, _ = np.histogram(v, bins='auto', density=True)
-                                    stats["entropy"] = float(scipy.stats.entropy(counts)) if len(counts) > 0 else 0.0
-                                except:
-                                    stats["entropy"] = 0.0
-                            break
+                    from export_plot_utils import get_safe_histogram_name
+                    expected_name = f"{get_safe_histogram_name(img_name, mask_name)}.png"
+                    
+                    if hist_file == expected_name:
+                        # Extract metadata for project JSON documentation
+                        parts = img_name.split('_')
+                        if len(parts) >= 6:
+                            sample_name = parts[0]
+                            slide_number = parts[1]
+                            well_position = parts[4]
+                            probe_name = os.path.splitext(parts[5])[0]
+                            
+                        v = np.array(values)
+                        if len(v) > 0:
+                            stats["mean"] = float(np.mean(v))
+                            stats["median"] = float(np.median(v))
+                            stats["std"] = float(np.std(v))
+                            stats["skewness"] = float(scipy.stats.skew(v))
+                            stats["kurtosis"] = float(scipy.stats.kurtosis(v))
+                            stats["q05"] = float(np.percentile(v, 5))
+                            stats["q25"] = float(np.percentile(v, 25))
+                            stats["q75"] = float(np.percentile(v, 75))
+                            stats["q95"] = float(np.percentile(v, 95))
+                            
+                            # Entropy: using histogram-based approach
+                            try:
+                                counts, _ = np.histogram(v, bins='auto', density=True)
+                                stats["entropy"] = float(scipy.stats.entropy(counts)) if len(counts) > 0 else 0.0
+                            except:
+                                stats["entropy"] = 0.0
+                        break
 
                 project_data["Histograms"][hist_file] = {
                     "path": os.path.abspath(hist_path),
+                    "sample": sample_name,
+                    "slide": slide_number,
+                    "well": well_position,
+                    "probe": probe_name,
                     "linked_mask": mask_name,
                     "cluster_method": cluster_method,
                     "histograms_json": os.path.abspath(json_measurements_path),
@@ -790,25 +800,19 @@ class MainWindow(QMainWindow):
                 for mask_name, measurements in mask_to_measurements.items():
                     if mask_name in name:
                         for img_name, values in measurements.items():
-                            safe_img = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in img_name])
-                            if safe_img in name:
-                                items_measurements.append((f"{img_name} ({mask_name})", values))
+                            # Use the new naming convention to match the graph name
+                            from export_plot_utils import get_safe_histogram_name
+                            column_header = get_safe_histogram_name(img_name, mask_name)
+                        
+                            if column_header in name:
+                                items_measurements.append((column_header, values))
                                 found = True
                                 break
-                            
-                            parts = safe_img.split('_')
-                            if len(parts) >= 6:
-                                well_pos = parts[4]
-                                probe = os.path.splitext(parts[5])[0]
-                                if f"_{well_pos}_{probe}" in name:
-                                    items_measurements.append((f"{img_name} ({mask_name})", values))
-                                    found = True
-                                    break
                         if found: break
                 
-            if items_measurements:
-                histogram_plots.create_dynamic_overlaid_histogram(items_measurements, output_path=path)
-                QMessageBox.information(self, "Save PNG", f"Combined histogram saved to {path}")
+                if items_measurements:
+                    histogram_plots.create_dynamic_overlaid_histogram(items_measurements, output_path=path)
+                    QMessageBox.information(self, "Save PNG", f"Combined histogram saved to {path}")
 
     def _export_selected_graphs(self):
         if not self.working_dir: return
@@ -843,20 +847,14 @@ class MainWindow(QMainWindow):
             for mask_name, measurements in mask_to_measurements.items():
                 if mask_name in name:
                     for img_name, values in measurements.items():
-                        safe_img = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in img_name])
-                        if safe_img in name:
-                            items_measurements.append((f"{img_name} ({mask_name})", values))
+                        # Use the new naming convention to match the graph name
+                        from export_plot_utils import get_safe_histogram_name
+                        column_header = get_safe_histogram_name(img_name, mask_name)
+                        
+                        if column_header in name:
+                            items_measurements.append((column_header, values))
                             found = True
                             break
-                        
-                        parts = safe_img.split('_')
-                        if len(parts) >= 6:
-                            well_pos = parts[4]
-                            probe = os.path.splitext(parts[5])[0]
-                            if f"_{well_pos}_{probe}" in name:
-                                items_measurements.append((f"{img_name} ({mask_name})", values))
-                                found = True
-                                break
                     if found: break
 
         if not items_measurements:
@@ -865,25 +863,31 @@ class MainWindow(QMainWindow):
 
         try:
             import csv
-            # We want to export raw values. Since lengths might differ, we'll write them in columns.
-            # Find the maximum length to pad
-            max_len = max(len(values) for _, values in items_measurements)
+            # We want to export histogram frequencies (0-255 intensity).
             
             with open(path, 'w', newline='') as f:
                 writer = csv.writer(f)
-                # Header
-                writer.writerow([label for label, _ in items_measurements])
-                # Data rows
-                for i in range(max_len):
-                    row = []
-                    for _, values in items_measurements:
-                        if i < len(values):
-                            row.append(values[i])
-                        else:
-                            row.append("")
+                # Header: Intensity, then all selected labels
+                labels = [label for label, _ in items_measurements]
+                writer.writerow(["Intensity"] + labels)
+                
+                # Calculate histograms for each
+                histograms = []
+                for _, values in items_measurements:
+                    if len(values) > 0:
+                        counts, _ = np.histogram(values, bins=range(257))
+                        histograms.append(counts)
+                    else:
+                        histograms.append([0] * 256)
+                
+                # Data rows (0-255)
+                for i in range(256):
+                    row = [i]
+                    for h in histograms:
+                        row.append(h[i])
                     writer.writerow(row)
             
-            QMessageBox.information(self, "Export CSV", f"Raw values exported to {path}")
+            QMessageBox.information(self, "Export CSV", f"Histogram data exported to {path}")
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"An error occurred: {str(e)}")
 
