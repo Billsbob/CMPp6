@@ -321,6 +321,18 @@ class MainWindow(QMainWindow):
         if directory:
             self.working_dir = directory
             self.asset_manager.set_working_dir(directory)
+            
+            # Check for naming convention violations
+            invalid_files = self.asset_manager.validate_filenames()
+            if invalid_files:
+                msg = "The following files do not match the naming convention:\n\n"
+                msg += "\n".join(invalid_files[:20])
+                if len(invalid_files) > 20:
+                    msg += f"\n... and {len(invalid_files) - 20} more."
+                msg += "\n\nRequired convention:\n<Sample>_<Slide ##>_<Owner Initials>_<ObjectiveMag>_<Well Position>_<Probe>\n"
+                msg += "Example: 123_01_JS_20x_5_DAPI.tif"
+                QMessageBox.warning(self, "Naming Convention Warning", msg)
+
             self.image_handler.clear()
             self.visible_masks.clear()
             self._update_asset_list()

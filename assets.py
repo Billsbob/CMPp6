@@ -242,6 +242,52 @@ class AssetManager:
         with open(project_json_path, 'w') as f:
             json.dump(project_data, f, indent=4)
 
+    def validate_filenames(self):
+        """
+        Validates filenames in the working directory against the convention:
+        <Sample>_<Slide ##>_<Owner Initials>_<ObjectiveMag>_<Well Position>_<Probe>
+        
+        Rules:
+        - <Sample>: Numbers
+        - <Slide ##>: Numbers
+        - <Owner Initials>: Letters
+        - <ObjectiveMag>: Number followed by 'x' or 'X'
+        - <Well Position>: Number between 1 and 12
+        - Probe: Letters, no numbers
+        """
+        invalid_files = []
+        if not self.working_dir:
+            return invalid_files
+
+        import re
+        # Pattern components:
+        # ^(\d+)                  : <Sample> (numbers)
+        # _(\d+)                  : <Slide ##> (numbers)
+        # _([a-zA-Z]+)            : <Owner Initials> (letters)
+        # _(\d+[xX])              : <ObjectiveMag> (number followed by x or X)
+        # _(\d+)                  : <Well Position> (we'll check 1-12 range manually or with regex)
+        # _([a-zA-Z]+)            : <Probe> (letters, no numbers)
+        # \.[^.]+$                : file extension
+        
+        pattern = re.compile(r'^(\d+)_(\d+)_([a-zA-Z]+)_(\d+[xX])_(\d+)_([a-zA-Z]+)\.[^.]+$')
+
+        for f in os.listdir(self.working_dir):
+            if f.lower().endswith(('.tif', '.tiff', '.png', '.bmp', '.jpg', '.jpeg')):
+                match = pattern.match(f)
+                if not match:
+                    invalid_files.append(f)
+                    continue
+                
+                # Check Well Position range (1-12)
+                try:
+                    well_pos = int(match.group(5))
+                    if not (1 <= well_pos <= 12):
+                        invalid_files.append(f)
+                except ValueError:
+                    invalid_files.append(f)
+
+        return invalid_files
+
     def scan_assets(self):
         if not self.working_dir:
             return
