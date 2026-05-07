@@ -4,7 +4,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import cv2
 
-def create_histograms(measurements, mask_name, output_dir):
+def create_histograms(measurements, mask_name, output_dir, source_masks=None):
     """
     Create individual histograms for each image's measurements.
     
@@ -12,6 +12,7 @@ def create_histograms(measurements, mask_name, output_dir):
         measurements (dict): Image name to ROI intensity values.
         mask_name (str): Name of the mask used.
         output_dir (str): Directory to save the histogram images.
+        source_masks (list, optional): List of source masks if the mask is a merged one.
         
     Returns:
         list of str: List of filenames of the generated histograms.
@@ -28,7 +29,10 @@ def create_histograms(measurements, mask_name, output_dir):
             
         plt.figure(figsize=(10, 6))
         sns.histplot(values, kde=True)
-        plt.title(f"Histogram of {image_name} under {mask_name}")
+        title = f"Histogram of {image_name} under {mask_name}"
+        if source_masks:
+            title += f"\n(Sources: {', '.join(source_masks)})"
+        plt.title(title)
         plt.xlabel("Intensity")
         plt.ylabel("Frequency")
         
@@ -42,7 +46,7 @@ def create_histograms(measurements, mask_name, output_dir):
         
     return generated_files
 
-def create_overlaid_histogram(measurements, mask_name, output_dir):
+def create_overlaid_histogram(measurements, mask_name, output_dir, source_masks=None):
     """
     Create one histogram with all measurements overlaid as different series.
     Adjust Y-axis to the maximum value of all histograms.
@@ -51,6 +55,7 @@ def create_overlaid_histogram(measurements, mask_name, output_dir):
         measurements (dict): Image name to ROI intensity values.
         mask_name (str): Name of the mask used.
         output_dir (str): Directory to save the histogram image.
+        source_masks (list, optional): List of source masks if the mask is a merged one.
         
     Returns:
         str: Filename of the generated overlaid histogram.
@@ -84,7 +89,10 @@ def create_overlaid_histogram(measurements, mask_name, output_dir):
         counts, bins = np.histogram(values, bins='auto')
         max_freq = max(max_freq, counts.max())
 
-    plt.title(f"Overlaid Histograms under {mask_name}")
+    title = f"Overlaid Histograms under {mask_name}"
+    if source_masks:
+        title += f"\n(Sources: {', '.join(source_masks)})"
+    plt.title(title)
     plt.xlabel("Intensity")
     plt.ylabel("Frequency")
     plt.legend(title="Images")
@@ -104,7 +112,7 @@ def create_overlaid_histogram(measurements, mask_name, output_dir):
     
     return hist_filename
 
-def create_dynamic_overlaid_histogram(items_measurements, title="Combined Histograms", output_path=None):
+def create_dynamic_overlaid_histogram(items_measurements, title="Combined Histograms", output_path=None, source_masks=None):
     """
     Create a histogram overlay from a list of (label, values) tuples.
     
@@ -112,6 +120,7 @@ def create_dynamic_overlaid_histogram(items_measurements, title="Combined Histog
         items_measurements (list of tuples): List of (label, values) to plot.
         title (str): Plot title.
         output_path (str, optional): If provided, save the plot to this path.
+        source_masks (list, optional): List of source masks if applicable.
         
     Returns:
         np.ndarray: The plot as an RGB image array.
@@ -133,6 +142,8 @@ def create_dynamic_overlaid_histogram(items_measurements, title="Combined Histog
         if len(counts) > 0:
             max_freq = max(max_freq, counts.max())
             
+    if source_masks:
+        title += f"\n(Sources: {', '.join(source_masks)})"
     plt.title(title)
     plt.xlabel("Intensity")
     plt.ylabel("Frequency")

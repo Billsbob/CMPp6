@@ -478,10 +478,7 @@ class MainWindow(QMainWindow):
                 return
 
             graph_dir = os.path.join(self.working_dir, "Graphs")
-            hist_files = histogram_plots.create_histograms(measurements, mask_name, graph_dir)
-            json_measurements_path = export_plot_utils.save_measurements_json(measurements, mask_name, graph_dir)
-            csv_measurements_path = export_plot_utils.save_group_csv(measurements, mask_name, graph_dir)
-
+            
             # Update project JSON with histograms
             image_list = self.asset_manager.get_image_list()
             project_name = "project_"
@@ -501,11 +498,17 @@ class MainWindow(QMainWindow):
                 except:
                     pass
 
+            # Find mask metadata if available
+            mask_metadata = project_data.get("Masks", {}).get(mask_name, {})
+            source_masks = mask_metadata.get("source_masks")
+
+            hist_files = histogram_plots.create_histograms(measurements, mask_name, graph_dir, source_masks=source_masks)
+            json_measurements_path = export_plot_utils.save_measurements_json(measurements, mask_name, graph_dir)
+            csv_measurements_path = export_plot_utils.save_group_csv(measurements, mask_name, graph_dir)
+
             if "Histograms" not in project_data:
                 project_data["Histograms"] = {}
 
-            # Find mask metadata if available
-            mask_metadata = project_data.get("Masks", {}).get(mask_name, {})
             cluster_method = mask_metadata.get("cluster_method", "Unknown")
 
             for hist_file in hist_files:
@@ -725,6 +728,26 @@ class MainWindow(QMainWindow):
                         except:
                             pass
 
+            # Find project JSON path
+            image_list = self.asset_manager.get_image_list()
+            project_name = "project_"
+            if image_list:
+                parts = image_list[0].split('_')
+                if len(parts) >= 2:
+                    project_name = f"{parts[0]}_{parts[1]}_"
+            
+            json_dir = os.path.join(self.working_dir, "JSON")
+            project_json_path = os.path.join(json_dir, f"{project_name}.json")
+
+            project_data = {}
+            if os.path.exists(project_json_path):
+                try:
+                    with open(project_json_path, 'r') as f:
+                        project_data = json.load(f)
+                except:
+                    pass
+
+            source_masks = None
             for item in selected_graphs:
                 name = item.text()
                 if name.startswith("JointPlot_"):
@@ -738,6 +761,9 @@ class MainWindow(QMainWindow):
                     # Overlaid: <Mask Name>_Overlay.png or Hist_Overlay_<Mask Name>.png
                     
                     if mask_name in name:
+                        # Get source masks for the title
+                        source_masks = project_data.get("Masks", {}).get(mask_name, {}).get("source_masks")
+
                         for img_name, values in measurements.items():
                             # Create safe version of image name used in filenames
                             safe_img = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in img_name])
@@ -762,7 +788,7 @@ class MainWindow(QMainWindow):
                         if found: break
             
             if items_measurements:
-                combined_rgb = histogram_plots.create_dynamic_overlaid_histogram(items_measurements)
+                combined_rgb = histogram_plots.create_dynamic_overlaid_histogram(items_measurements, source_masks=source_masks)
                 if combined_rgb is not None:
                     # Ensure the array is C-contiguous for QImage
                     combined_rgb = np.ascontiguousarray(combined_rgb)
@@ -783,6 +809,25 @@ class MainWindow(QMainWindow):
         if not path: return
 
         graph_dir = os.path.join(self.working_dir, "Graphs")
+        # Get project JSON
+        image_list = self.asset_manager.get_image_list()
+        project_name = "project_"
+        if image_list:
+            parts = image_list[0].split('_')
+            if len(parts) >= 2:
+                project_name = f"{parts[0]}_{parts[1]}_"
+        
+        json_dir = os.path.join(self.working_dir, "JSON")
+        project_json_path = os.path.join(json_dir, f"{project_name}.json")
+
+        project_data = {}
+        if os.path.exists(project_json_path):
+            try:
+                with open(project_json_path, 'r') as f:
+                    project_data = json.load(f)
+            except:
+                pass
+
         if len(selected) == 1:
             # Just copy the file
             import shutil
@@ -803,6 +848,7 @@ class MainWindow(QMainWindow):
                         except:
                             pass
 
+            source_masks_list = []
             for item in selected:
                 name = item.text()
                 if name.startswith("JointPlot_"):
@@ -811,6 +857,11 @@ class MainWindow(QMainWindow):
                 found = False
                 for mask_name, measurements in mask_to_measurements.items():
                     if mask_name in name:
+                        # Track source masks if any
+                        s_masks = project_data.get("Masks", {}).get(mask_name, {}).get("source_masks")
+                        if s_masks:
+                            source_masks_list.extend(s_masks)
+
                         for img_name, values in measurements.items():
                             # Use the new naming convention to match the graph name
                             from export_plot_utils import get_safe_histogram_name
@@ -823,7 +874,9 @@ class MainWindow(QMainWindow):
                         if found: break
                 
                 if items_measurements:
-                    histogram_plots.create_dynamic_overlaid_histogram(items_measurements, output_path=path)
+                    # Remove duplicates from source_masks_list
+                    unique_sources = sorted(list(set(source_masks_list)))
+                    histogram_plots.create_dynamic_overlaid_histogram(items_measurements, output_path=path, source_masks=unique_sources if unique_sources else None)
                     QMessageBox.information(self, "Save PNG", f"Combined histogram saved to {path}")
 
     def _export_selected_graphs(self):
@@ -1818,8 +1871,11 @@ class MainWindow(QMainWindow):
 
         try:
             merged_mask = None
+            source_masks = []
             for item in selected_items:
-                mask_path = os.path.join(mask_dir, item.text())
+                mask_name = item.text()
+                source_masks.append(mask_name)
+                mask_path = os.path.join(mask_dir, mask_name)
                 mask = np.load(mask_path)
                 
                 if merged_mask is None:
@@ -1832,6 +1888,38 @@ class MainWindow(QMainWindow):
                     merged_mask = np.logical_or(merged_mask, mask.astype(bool))
 
             np.save(output_path, merged_mask.astype(np.uint8))
+
+            # Update Project JSON
+            try:
+                image_list = self.asset_manager.get_image_list()
+                project_name = "project_"
+                if image_list:
+                    parts = image_list[0].split('_')
+                    if len(parts) >= 2:
+                        project_name = f"{parts[0]}_{parts[1]}_"
+                
+                json_dir = os.path.join(self.working_dir, "JSON")
+                project_json_path = os.path.join(json_dir, f"{project_name}.json")
+
+                project_data = {}
+                if os.path.exists(project_json_path):
+                    with open(project_json_path, 'r') as f:
+                        project_data = json.load(f)
+                
+                if "Masks" not in project_data:
+                    project_data["Masks"] = {}
+                
+                project_data["Masks"][new_name] = {
+                    "path": os.path.abspath(output_path),
+                    "source_masks": source_masks,
+                    "type": "merged"
+                }
+
+                with open(project_json_path, 'w') as f:
+                    json.dump(project_data, f, indent=4)
+            except Exception as json_err:
+                print(f"Failed to update project JSON: {json_err}")
+
             self._update_mask_list()
             QMessageBox.information(self, "Merge Masks", f"Successfully merged masks into {new_name}")
         except Exception as e:
