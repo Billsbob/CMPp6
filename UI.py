@@ -975,6 +975,10 @@ class MainWindow(QMainWindow):
             graph_dir = os.path.join(self.working_dir, "Graphs")
             for item in selected:
                 name = item.text()
+                
+                # Move to deleted assets in JSON
+                self.asset_manager.move_to_deleted_assets(name, "Histogram")
+
                 path = os.path.join(graph_dir, name)
                 if os.path.exists(path):
                     os.remove(path)
@@ -1811,6 +1815,10 @@ class MainWindow(QMainWindow):
             mask_dir = os.path.join(self.working_dir, "Cluster Masks")
             for item in selected:
                 name = item.text()
+
+                # Move to deleted assets in JSON
+                self.asset_manager.move_to_deleted_assets(name, "Mask")
+
                 path = os.path.join(mask_dir, name)
                 if os.path.exists(path):
                     os.remove(path)

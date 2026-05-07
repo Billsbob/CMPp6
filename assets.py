@@ -195,16 +195,19 @@ class AssetManager:
         self.scan_assets()
         self.update_project_json()
 
-    def update_project_json(self):
+    def get_project_json_path(self):
         if not self.working_dir:
-            return
+            return None
 
         image_list = self.get_image_list()
         if not image_list:
-            return
+            # Try to find any image in the directory even if not scanned yet
+            files = [f for f in os.listdir(self.working_dir) if f.lower().endswith(('.tif', '.tiff', '.png', '.bmp', '.jpg', '.jpeg'))]
+            if not files:
+                return None
+            image_list = files
 
         # Use the first image to determine the project name
-        # Convention: <Sample>_<Slide ##>_<Owner Initials>_<ObjectiveMag>_<Well Position>_<Probe>
         first_image = image_list[0]
         parts = first_image.split('_')
         if len(parts) >= 2:
@@ -213,7 +216,69 @@ class AssetManager:
             project_name = os.path.basename(self.working_dir) + "_"
 
         json_dir = os.path.join(self.working_dir, "JSON")
-        project_json_path = os.path.join(json_dir, f"{project_name}.json")
+        return os.path.join(json_dir, f"{project_name}.json")
+
+    def move_to_deleted_assets(self, asset_name, asset_type, asset_data=None):
+        """
+        Moves an asset reference to the 'Deleted Assets' section in project JSON.
+        asset_type: 'Image', 'Mask', or 'Histogram'
+        """
+        project_json_path = self.get_project_json_path()
+        if not project_json_path or not os.path.exists(project_json_path):
+            return
+
+        try:
+            with open(project_json_path, 'r') as f:
+                project_data = json.load(f)
+        except:
+            return
+
+        if "Deleted Assets" not in project_data:
+            project_data["Deleted Assets"] = []
+
+        entry = {
+            "name": asset_name,
+            "type": asset_type,
+            "deletion_date": __import__('datetime').datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+
+        # If it's an image, we might want to move its paths from main sections
+        if asset_type == "Image":
+            if "Image Paths" in project_data and asset_name in project_data["Image Paths"]:
+                entry["path"] = project_data["Image Paths"].pop(asset_name)
+            if "Image JSON Paths" in project_data and asset_name in project_data["Image JSON Paths"]:
+                entry["json_path"] = project_data["Image JSON Paths"].pop(asset_name)
+            if "Image IDs" in project_data and asset_name in project_data["Image IDs"]:
+                project_data["Image IDs"].remove(asset_name)
+
+        elif asset_type == "Mask":
+            if "Masks" in project_data and asset_name in project_data["Masks"]:
+                entry["data"] = project_data["Masks"].pop(asset_name)
+            elif asset_data:
+                entry["data"] = asset_data
+
+        elif asset_type == "Histogram":
+            if "Histograms" in project_data and asset_name in project_data["Histograms"]:
+                entry["data"] = project_data["Histograms"].pop(asset_name)
+            elif asset_data:
+                entry["data"] = asset_data
+
+        project_data["Deleted Assets"].append(entry)
+
+        with open(project_json_path, 'w') as f:
+            json.dump(project_data, f, indent=4)
+
+    def update_project_json(self):
+        if not self.working_dir:
+            return
+
+        image_list = self.get_image_list()
+        if not image_list:
+            return
+
+        project_json_path = self.get_project_json_path()
+        if not project_json_path:
+            return
 
         project_data = {}
         if os.path.exists(project_json_path):
@@ -222,6 +287,9 @@ class AssetManager:
                     project_data = json.load(f)
             except:
                 project_data = {}
+
+        # Preserve Deleted Assets
+        deleted_assets = project_data.get("Deleted Assets", [])
 
         # Update Image IDs and Paths
         project_data["Image IDs"] = image_list
@@ -238,6 +306,8 @@ class AssetManager:
         
         if "Masks" not in project_data:
             project_data["Masks"] = {}
+
+        project_data["Deleted Assets"] = deleted_assets
 
         with open(project_json_path, 'w') as f:
             json.dump(project_data, f, indent=4)
@@ -313,6 +383,9 @@ class AssetManager:
     def delete_image(self, name):
         asset = self.get_image_by_name(name)
         if asset:
+            # Move to deleted assets in JSON
+            self.move_to_deleted_assets(name, "Image")
+
             if name in self.images:
                 del self.images[name]
             else:
