@@ -1725,20 +1725,64 @@ class MainWindow(QMainWindow):
         if not self.asset_manager.images:
             return
 
-        angle, ok = QInputDialog.getDouble(self, "Rotate All", "Angle (degrees):", 0, -360, 360, 1)
-        if ok:
-            reply = QMessageBox.warning(self, "Apply to All", 
-                                      f"This rotation of {angle} degrees will be applied to ALL loaded images. Do you want to continue?",
-                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if reply == QMessageBox.No:
+        line_angle = self.viewer_view.get_rotation_angle()
+        if line_angle is not None:
+            # line_angle is from QLineF.angle(): 0 is right, increases CCW.
+            # To make the line vertical (90 or 270 deg):
+            # Option 1: target 90 deg => rotation1 = 90 - line_angle
+            # Option 2: target 270 deg => rotation2 = 270 - line_angle
+            
+            rot1 = 90 - line_angle
+            rot2 = 270 - line_angle
+            
+            # Normalize to -180 to 180
+            def normalize(a):
+                while a > 180: a -= 360
+                while a <= -180: a += 360
+                return a
+            
+            rot1 = normalize(rot1)
+            rot2 = normalize(rot2)
+            
+            # Determine which is CW and which is CCW
+            # Positive is CCW in OpenCV/Qt, Negative is CW.
+            # Usually users think: 
+            # If rot > 0, it's CCW.
+            # If rot < 0, it's CW.
+            
+            options = []
+            if rot1 > 0: options.append(f"Counter-Clockwise ({rot1:.2f} deg)")
+            else: options.append(f"Clockwise ({rot1:.2f} deg)")
+            
+            if rot2 > 0: options.append(f"Counter-Clockwise ({rot2:.2f} deg)")
+            else: options.append(f"Clockwise ({rot2:.2f} deg)")
+            
+            choice, ok = QInputDialog.getItem(self, "Rotation Direction", 
+                                            "Select rotation direction for perpendicular alignment:", 
+                                            options, 0, False)
+            if not ok:
                 return
+            
+            angle = rot1 if choice == options[0] else rot2
+            msg = f"Rotate all images by {angle:.2f} degrees?"
+        else:
+            angle, ok = QInputDialog.getDouble(self, "Rotate All", "Angle (degrees):", 0, -360, 360, 1)
+            if not ok:
+                return
+            msg = f"This rotation of {angle} degrees will be applied to ALL loaded images. Do you want to continue?"
 
-            for name, asset in self.asset_manager.images.items():
-                asset.pipeline.config.setdefault("transforms", []).append({"type": "rotate", "angle": angle})
-                asset.save_project()
-            self.cached_composite = None
-            self._update_asset_list()
-            self._refresh_viewer()
+        reply = QMessageBox.warning(self, "Apply to All", msg,
+                                  QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.No:
+            return
+
+        for name, asset in self.asset_manager.images.items():
+            asset.pipeline.config.setdefault("transforms", []).append({"type": "rotate", "angle": angle})
+            asset.save_project()
+        self.cached_composite = None
+        self.viewer_view.clear_rotation_line()
+        self._update_asset_list()
+        self._refresh_viewer()
 
     def _export_modified_images(self):
         if not self.working_dir: return
