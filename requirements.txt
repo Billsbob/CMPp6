@@ -22,6 +22,7 @@ PySide6_Essentials==6.10.2
 python-dateutil==2.9.0.post0
 pywin32-ctypes==0.2.3
 qimage2ndarray==1.10.0
+scikit-image==0.26.0
 scikit-learn==1.8.0
 scipy==1.17.1
 seaborn==0.13.2
