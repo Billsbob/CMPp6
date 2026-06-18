@@ -34,7 +34,7 @@ def apply_unsharp_mask(data, radius=2, percent=150, threshold=3):
     sharpened = data + diff * (percent / 100.0)
     return np.where(mask, sharpened, data).astype(data.dtype)
 
-def rotate_image(data, angle, expand=False, crop_border=5):
+def rotate_image(data, angle, expand=False, crop_border=5, fill_color=0):
     if angle == 0:
         if crop_border > 0:
             h, w = data.shape[:2]
@@ -54,9 +54,9 @@ def rotate_image(data, angle, expand=False, crop_border=5):
         nH = int((h * cos) + (w * sin))
         M[0, 2] += (nW / 2) - center[0]
         M[1, 2] += (nH / 2) - center[1]
-        rotated = cv2.warpAffine(data, M, (nW, nH))
+        rotated = cv2.warpAffine(data, M, (nW, nH), borderValue=fill_color)
     else:
-        rotated = cv2.warpAffine(data, M, (w, h))
+        rotated = cv2.warpAffine(data, M, (w, h), borderValue=fill_color)
 
     if crop_border > 0:
         rh, rw = rotated.shape[:2]

@@ -1,4 +1,6 @@
 import os
+import tempfile
+import shutil
 import numpy as np
 import json
 import image_manipulation
@@ -19,7 +21,7 @@ class TransformPipeline:
             "transforms": []
         }
 
-    def apply(self, data, data_only=False):
+    def apply(self, data, data_only=False, for_display=False):
         if data is None:
             return None
             
@@ -27,19 +29,33 @@ class TransformPipeline:
         
         transforms = self.config.get("transforms", [])
         
+        # Backward compatibility for old config format
         if not transforms:
             crop = self.config.get("crop")
             if crop:
                 transforms.append({"type": "crop", "params": crop})
             rotate = self.config.get("rotate", 0.0)
             if rotate != 0.0:
-                transforms.append({"type": "rotate", "angle": rotate})
+                # Use default black for old rotate format
+                transforms.append({"type": "rotate", "angle": rotate, "fill_color": "black"})
 
         for t in transforms:
             if t["type"] == "crop":
                 processed = image_manipulation.crop_image(processed, *t["params"], crop_border=5)
             elif t["type"] == "rotate":
-                processed = image_manipulation.rotate_image(processed, t["angle"], expand=True, crop_border=5)
+                angle = t.get("angle", 0)
+                fill_color_name = t.get("fill_color", "black")
+                fill_value = 0
+                if fill_color_name.lower() == "white":
+                    if data.dtype == np.uint8:
+                        fill_value = 255
+                    elif data.dtype == np.uint16:
+                        fill_value = 65535
+                    else:
+                        # Fallback for float or other types, assuming 0..1 if max <= 1 else 255
+                        fill_value = 1.0 if data.max() <= 1.01 else 255
+                
+                processed = image_manipulation.rotate_image(processed, angle, expand=True, crop_border=5, fill_color=fill_value)
 
         filters = self.config.get("filters", [])
         params = self.config.get("filter_params", {})
@@ -77,6 +93,7 @@ class TransformPipeline:
         if data_only:
             return processed
 
+        # Display-only transforms
         if self.config.get("contrast_stretch", False):
             p2, p98 = np.percentile(processed, (2, 98))
             if p98 > p2:
@@ -84,7 +101,7 @@ class TransformPipeline:
             else:
                 processed = np.zeros_like(processed)
 
-        if self.config.get("normalize", False):
+        if self.config.get("normalize", False) or (for_display and not self.config.get("contrast_stretch", False)):
             d_min, d_max = processed.min(), processed.max()
             if d_max > d_min:
                 processed = (processed - d_min) / (d_max - d_min)
@@ -108,6 +125,49 @@ class Asset:
         self.name = self.base_name
         self._data = None
         self.pipeline = TransformPipeline()
+        self._display_png_path = None
+
+    def get_display_png_path(self):
+        if self._display_png_path and os.path.exists(self._display_png_path):
+            return self._display_png_path
+        
+        if not self.working_dir:
+            return None
+        
+        temp_dir = os.path.join(self.working_dir, "temp_display")
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        self._display_png_path = os.path.join(temp_dir, f"{self.base_name}.png")
+        self.update_display_png()
+        return self._display_png_path
+
+    def update_display_png(self):
+        """Generates and saves an 8-bit PNG copy of the rendered data for display purposes."""
+        if not self.working_dir:
+            return
+
+        data = self.get_rendered_data(for_display=True)
+        if data is None:
+            return
+
+        # Normalize data to 0-255 8-bit for PNG display
+        if data.max() <= 1.01 and data.min() >= -0.01:
+            display_data = (data * 255).astype(np.uint8)
+        else:
+            d_min, d_max = data.min(), data.max()
+            if d_max > d_min:
+                display_data = ((data - d_min) / (d_max - d_min) * 255).astype(np.uint8)
+            else:
+                display_data = np.zeros_like(data, dtype=np.uint8)
+        
+        display_data = np.ascontiguousarray(display_data)
+        
+        temp_dir = os.path.join(self.working_dir, "temp_display")
+        os.makedirs(temp_dir, exist_ok=True)
+        self._display_png_path = os.path.join(temp_dir, f"{self.base_name}.png")
+        
+        # Save as 8-bit PNG
+        cv2.imwrite(self._display_png_path, display_data)
 
     def get_json_path(self):
         if not self.working_dir:
@@ -153,12 +213,15 @@ class Asset:
             
         return self._data
 
-    def get_rendered_data(self, data_only=False):
-        return self.pipeline.apply(self.data, data_only=data_only)
+    def get_rendered_data(self, data_only=False, for_display=False):
+        return self.pipeline.apply(self.data, data_only=data_only, for_display=for_display)
 
     def to_qimage(self, for_display=True):
         if for_display:
-            data = self.get_rendered_data()
+            png_path = self.get_display_png_path()
+            if png_path and os.path.exists(png_path):
+                return QImage(png_path)
+            data = self.get_rendered_data(for_display=True)
         else:
             data = self.data
 
@@ -177,9 +240,74 @@ class Asset:
         # Use qimage2ndarray to handle the conversion safely
         return qimage2ndarray.array2qimage(display_data).copy()
 
+class MaskAsset(Asset):
+    def load(self):
+        if not os.path.exists(self.path):
+            return None
+        
+        # Load as image
+        data = cv2.imread(self.path, cv2.IMREAD_UNCHANGED)
+        if data is None:
+            # Fallback for .npy if it still exists
+            if self.path.lower().endswith('.npy'):
+                try:
+                    data = np.load(self.path)
+                except Exception:
+                    return None
+            else:
+                return None
+        
+        # If color, convert to grayscale
+        if len(data.shape) == 3:
+            data = cv2.cvtColor(data, cv2.COLOR_BGR2GRAY)
+        
+        # Ensure it's treated as float32 for processing
+        self._data = data.astype(np.float32)
+            
+        return self._data
+
+    def get_json_path(self):
+        if not self.working_dir:
+            return self.path + ".json"
+        
+        json_dir = os.path.join(self.working_dir, "JSON", "Mask JSONs")
+        os.makedirs(json_dir, exist_ok=True)
+        return os.path.join(json_dir, self.base_name + ".json")
+
+    def update_display_png(self):
+        """Specialized update for mask display - usually masks don't need contrast stretch etc."""
+        if not self.working_dir:
+            return
+
+        data = self.get_rendered_data(for_display=True)
+        if data is None:
+            return
+
+        # For masks, we want to see them clearly. 
+        # If it's a binary mask (0, 1), scale to 255.
+        if data.max() <= 1.01:
+            display_data = (data * 255).astype(np.uint8)
+        else:
+            # Maybe it's labeled 0, 1, 2... 
+            # We could use a colormap, but for now just normalize to 255
+            d_min, d_max = data.min(), data.max()
+            if d_max > d_min:
+                display_data = ((data - d_min) / (d_max - d_min) * 255).astype(np.uint8)
+            else:
+                display_data = np.zeros_like(data, dtype=np.uint8)
+        
+        display_data = np.ascontiguousarray(display_data)
+        
+        temp_dir = os.path.join(self.working_dir, "temp_display")
+        os.makedirs(temp_dir, exist_ok=True)
+        self._display_png_path = os.path.join(temp_dir, f"{self.base_name}.png")
+        
+        cv2.imwrite(self._display_png_path, display_data)
+
 class AssetManager:
     def __init__(self):
         self.images = {}
+        self.masks = {}
         self.working_dir = None
 
     def set_working_dir(self, path):
@@ -188,12 +316,20 @@ class AssetManager:
         # Create folder structure
         os.makedirs(os.path.join(path, "Cluster Masks"), exist_ok=True)
         os.makedirs(os.path.join(path, "Graphs"), exist_ok=True)
+        os.makedirs(os.path.join(path, "temp_display"), exist_ok=True)
         json_dir = os.path.join(path, "JSON")
         os.makedirs(json_dir, exist_ok=True)
         os.makedirs(os.path.join(json_dir, "Image JSONs"), exist_ok=True)
+        os.makedirs(os.path.join(json_dir, "Mask JSONs"), exist_ok=True)
         
         self.scan_assets()
         self.update_project_json()
+
+    def cleanup_temp_display(self):
+        if self.working_dir:
+            temp_dir = os.path.join(self.working_dir, "temp_display")
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
 
     def get_project_json_path(self):
         if not self.working_dir:
@@ -369,8 +505,20 @@ class AssetManager:
                 self.images[f] = Asset(path, working_dir=self.working_dir)
                 self.images[f].load_project()
 
+        self.masks = {}
+        mask_dir = os.path.join(self.working_dir, "Cluster Masks")
+        if os.path.exists(mask_dir):
+            for f in os.listdir(mask_dir):
+                if f.lower().endswith(('.png', '.npy', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp')):
+                    path = os.path.join(mask_dir, f)
+                    self.masks[f] = MaskAsset(path, working_dir=self.working_dir)
+                    self.masks[f].load_project()
+
     def get_image_list(self):
         return sorted([img.name for img in self.images.values()])
+
+    def get_mask_list(self):
+        return sorted([m.name for m in self.masks.values()])
 
     def get_image_by_name(self, name):
         if name in self.images:
@@ -378,6 +526,14 @@ class AssetManager:
         for img in self.images.values():
             if img.name == name:
                 return img
+        return None
+
+    def get_mask_by_name(self, name):
+        if name in self.masks:
+            return self.masks[name]
+        for m in self.masks.values():
+            if m.name == name:
+                return m
         return None
 
     def delete_image(self, name):
@@ -392,4 +548,18 @@ class AssetManager:
                 for k, v in list(self.images.items()):
                     if v.name == name:
                         del self.images[k]
+                        break
+
+    def delete_mask(self, name):
+        asset = self.get_mask_by_name(name)
+        if asset:
+            # Move to deleted assets in JSON
+            self.move_to_deleted_assets(name, "Mask")
+
+            if name in self.masks:
+                del self.masks[name]
+            else:
+                for k, v in list(self.masks.items()):
+                    if v.name == name:
+                        del self.masks[k]
                         break

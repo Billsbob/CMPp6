@@ -11,7 +11,8 @@ exe_name = 'CMPp6_App'
 # Add any additional data files or folders needed by your application
 # Format: (source, destination)
 added_data = [
-    # ('assets', 'assets'),  # Example: include an assets folder
+    ('README.md', '.'),
+    ('requirements.txt', '.'),
 ]
 
 # PyInstaller arguments
@@ -22,7 +23,7 @@ args = [
     '--windowed',        # Do not open a console window (GUI app)
     '--clean',           # Clean PyInstaller cache and temporary files before building
     '--noconfirm',       # Replace output directory without asking
-    '--exclude-module', 'cupy', # Exclude cupy to keep package size down
+    '--exclude-module', 'cupy', 
     '--exclude-module', 'cupyx',
     '--exclude-module', 'cupy_backends',
     '--exclude-module', 'cuda_pathfinder',
@@ -35,6 +36,12 @@ args = [
     '--hidden-import', 'sklearn.neighbors._typedefs',
     '--hidden-import', 'scipy.special.cython_special',
     '--hidden-import', 'scipy.stats._stats',
+    '--hidden-import', 'pandas._libs.tslibs.base',
+    '--hidden-import', 'pandas._libs.tslibs.np_datetime',
+    '--hidden-import', 'pandas._libs.tslibs.nattype',
+    '--hidden-import', 'pandas._libs.tslibs.timedeltas',
+    '--hidden-import', 'skimage.filters.rank.core_cy_3d',
+    '--hidden-import', 'qimage2ndarray',
 ]
 
 # Add data files to arguments
@@ -57,6 +64,27 @@ if __name__ == '__main__':
     if not os.path.exists('build'):
         os.makedirs('build')
 
+    # Hidden imports for the spec file
+    hidden_imports = [
+        'sklearn.utils._typedefs',
+        'sklearn.neighbors._partition_nodes',
+        'sklearn.neighbors._quad_tree',
+        'sklearn.tree._utils',
+        'sklearn.utils._cython_blas',
+        'sklearn.neighbors._typedefs',
+        'scipy.special.cython_special',
+        'scipy.stats._stats',
+        'pandas._libs.tslibs.base',
+        'pandas._libs.tslibs.np_datetime',
+        'pandas._libs.tslibs.nattype',
+        'pandas._libs.tslibs.timedeltas',
+        'skimage.filters.rank.core_cy_3d',
+        'qimage2ndarray'
+    ]
+
+    # Excludes for the spec file
+    excludes = ['cupy', 'cupyx', 'cupy_backends', 'cuda_pathfinder', 'fast_array_utils']
+
     # Create the spec file content if it doesn't exist or we want to ensure it's correct
     spec_content = f"""
 # -*- mode: python ; coding: utf-8 -*-
@@ -64,40 +92,33 @@ import os
 import sys
 
 # Increase recursion limit for deep dependency trees
-sys.setrecursionlimit(5000)
+sys.setrecursionlimit(10000)
 
 a = Analysis(
     ['{entry_point}'],
     pathex=[],
     binaries=[],
     datas={added_data},
-    hiddenimports=[
-        'sklearn.utils._typedefs',
-        'sklearn.neighbors._partition_nodes',
-        'sklearn.neighbors._quad_tree',
-        'sklearn.tree._utils',
-        'sklearn.utils._cython_blas',
-        'scipy.special.cython_special',
-        'scipy.stats._stats'
-    ],
+    hiddenimports={hidden_imports},
     hookspath=[],
     hooksconfig={{}},
     runtime_hooks=[],
-    excludes=['cupy', 'cupyx', 'cupy_backends', 'cuda_pathfinder', 'fast_array_utils'],
+    excludes={excludes},
     noarchive=False,
     optimize=0,
 )
 
 # Filter out large CUDA DLLs from binaries
 excluded_dlls = {{
-    'cublas64_13.dll', 
-    'cublasLt64_13.dll', 
-    'cufft64_12.dll', 
-    'curand64_10.dll', 
-    'cusolver64_12.dll', 
-    'cusparse64_12.dll',
-    'nvJitLink_130_0.dll',
-    'nvrtc64_130_0.dll'
+    'cublas64_11.dll', 'cublas64_12.dll', 'cublas64_13.dll',
+    'cublasLt64_11.dll', 'cublasLt64_12.dll', 'cublasLt64_13.dll',
+    'cufft64_10.dll', 'cufft64_11.dll', 'cufft64_12.dll',
+    'curand64_10.dll',
+    'cusolver64_11.dll', 'cusolver64_12.dll',
+    'cusparse64_11.dll', 'cusparse64_12.dll',
+    'nvJitLink_120_0.dll', 'nvJitLink_130_0.dll',
+    'nvrtc64_120_0.dll', 'nvrtc64_130_0.dll',
+    'cudnn64_8.dll', 'cudnn64_9.dll'
 }}
 
 a.binaries = [x for x in a.binaries if os.path.basename(x[0]).lower() not in [d.lower() for d in excluded_dlls]]

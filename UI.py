@@ -372,7 +372,7 @@ class MainWindow(QMainWindow):
             return
 
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Import Mask", "", "Mask Files (*.npy)"
+            self, "Import Mask", "", "Mask Files (*.npy *.png *.jpg *.jpeg *.tif *.tiff *.bmp)"
         )
 
         if file_path:
@@ -390,6 +390,7 @@ class MainWindow(QMainWindow):
                     QMessageBox.critical(self, "Error", f"Failed to copy mask: {str(e)}")
                     return
 
+            self.asset_manager.scan_assets()
             self._update_mask_list()
 
     def _update_asset_list(self):
@@ -412,19 +413,15 @@ class MainWindow(QMainWindow):
         if not self.working_dir:
             self.mask_list.blockSignals(False)
             return
-        mask_dir = os.path.join(self.working_dir, "Cluster Masks")
-        if os.path.exists(mask_dir):
-            masks = [f for f in os.listdir(mask_dir) if f.lower().endswith(".npy")]
-            # Sort masks
-            try:
-                masks.sort()
-            except:
-                pass
-            for mask_name in masks:
-                item = QListWidgetItem(mask_name)
-                self.mask_list.addItem(item)
-                if mask_name in self.visible_masks:
-                    item.setSelected(True)
+        
+        for name in self.asset_manager.get_mask_list():
+            asset = self.asset_manager.get_mask_by_name(name)
+            item = QListWidgetItem(name)
+            qimg = asset.to_qimage()
+            item.setIcon(QPixmap.fromImage(qimg.scaled(100, 100, Qt.KeepAspectRatio)))
+            self.mask_list.addItem(item)
+            if name in self.visible_masks:
+                item.setSelected(True)
         self.mask_list.blockSignals(False)
 
     def _update_graph_list(self):
@@ -456,7 +453,6 @@ class MainWindow(QMainWindow):
             return
         
         mask_name = selected_masks[0].text()
-        mask_path = os.path.join(self.working_dir, "Cluster Masks", mask_name)
 
         selected_images = self.image_list.selectedItems()
         if not selected_images:
@@ -472,7 +468,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Calculating histogram data and generating histograms...")
             QApplication.setOverrideCursor(Qt.WaitCursor)
             
-            measurements = measure_utilities.calculate_mask_measurements(self.asset_manager, image_names, mask_path)
+            measurements = measure_utilities.calculate_mask_measurements(self.asset_manager, image_names, mask_name)
             if not measurements:
                 QMessageBox.critical(self, "Graphing", "Failed to calculate histogram data.")
                 return
@@ -1030,8 +1026,10 @@ class MainWindow(QMainWindow):
                 project_data["Masks"] = {}
 
             for i, mask in enumerate(individual_masks):
-                new_mask_name = f"{mask_root_name}_{i+1:02d}.npy"
-                np.save(os.path.join(mask_dir, new_mask_name), mask)
+                new_mask_name = f"{mask_root_name}_{i+1:02d}.png"
+                # Save mask as 8-bit PNG
+                mask_to_save = mask.astype(np.uint8)
+                cv2.imwrite(os.path.join(mask_dir, new_mask_name), mask_to_save)
 
                 # Link in project JSON
                 mask_path = os.path.join(mask_dir, new_mask_name)
@@ -1050,6 +1048,7 @@ class MainWindow(QMainWindow):
             if stats_csv_path:
                 msg += f" Statistics saved to {os.path.basename(stats_csv_path)}."
             self.statusBar().showMessage(msg, 5000)
+            self.asset_manager.scan_assets()
             self._update_mask_list()
             self._update_graph_list()
         except Exception as e:
@@ -1098,7 +1097,7 @@ class MainWindow(QMainWindow):
         mask_names = []
         mask_dir = os.path.join(self.working_dir, "Cluster Masks")
         if os.path.exists(mask_dir):
-            mask_names = [f for f in os.listdir(mask_dir) if f.lower().endswith(".npy")]
+            mask_names = [f for f in os.listdir(mask_dir) if f.lower().endswith((".png", ".npy"))]
             mask_names.sort()
 
         dialog = ClusterParameterDialog(mask_names, self)
@@ -1108,11 +1107,11 @@ class MainWindow(QMainWindow):
             mask_name = params.pop("mask_name", "None")
             if mask_name != "None":
                 mask_root_name = os.path.splitext(mask_name)[0]
-                mask_path = os.path.join(mask_dir, mask_name)
-                try:
-                    mask_to_use = np.load(mask_path)
-                except Exception as e:
-                    QMessageBox.warning(self, "K-Means", f"Failed to load mask: {str(e)}")
+                mask_asset = self.asset_manager.get_mask_by_name(mask_name)
+                if mask_asset:
+                    mask_to_use = mask_asset.get_rendered_data(data_only=True)
+                else:
+                    QMessageBox.warning(self, "K-Means", f"Failed to load mask: {mask_name}")
             else:
                 mask_root_name = "KM"
             
@@ -1174,7 +1173,7 @@ class MainWindow(QMainWindow):
         mask_names = []
         mask_dir = os.path.join(self.working_dir, "Cluster Masks")
         if os.path.exists(mask_dir):
-            mask_names = [f for f in os.listdir(mask_dir) if f.lower().endswith(".npy")]
+            mask_names = [f for f in os.listdir(mask_dir) if f.lower().endswith((".png", ".npy"))]
             mask_names.sort()
 
         dialog = GMMParameterDialog(mask_names, self)
@@ -1184,11 +1183,11 @@ class MainWindow(QMainWindow):
             mask_name = params.pop("mask_name", "None")
             if mask_name != "None":
                 mask_root_name = os.path.splitext(mask_name)[0]
-                mask_path = os.path.join(mask_dir, mask_name)
-                try:
-                    mask_to_use = np.load(mask_path)
-                except Exception as e:
-                    QMessageBox.warning(self, "Gaussian Mixture", f"Failed to load mask: {str(e)}")
+                mask_asset = self.asset_manager.get_mask_by_name(mask_name)
+                if mask_asset:
+                    mask_to_use = mask_asset.get_rendered_data(data_only=True)
+                else:
+                    QMessageBox.warning(self, "Gaussian Mixture", f"Failed to load mask: {mask_name}")
             else:
                 mask_root_name = "GM"
 
@@ -1250,7 +1249,7 @@ class MainWindow(QMainWindow):
         mask_names = []
         mask_dir = os.path.join(self.working_dir, "Cluster Masks")
         if os.path.exists(mask_dir):
-            mask_names = [f for f in os.listdir(mask_dir) if f.lower().endswith(".npy")]
+            mask_names = [f for f in os.listdir(mask_dir) if f.lower().endswith((".png", ".npy"))]
             mask_names.sort()
 
         dialog = ISODATAParameterDialog(mask_names, self)
@@ -1260,11 +1259,11 @@ class MainWindow(QMainWindow):
             mask_name = params.pop("mask_name", "None")
             if mask_name != "None":
                 mask_root_name = os.path.splitext(mask_name)[0]
-                mask_path = os.path.join(mask_dir, mask_name)
-                try:
-                    mask_to_use = np.load(mask_path)
-                except Exception as e:
-                    QMessageBox.warning(self, "ISODATA", f"Failed to load mask: {str(e)}")
+                mask_asset = self.asset_manager.get_mask_by_name(mask_name)
+                if mask_asset:
+                    mask_to_use = mask_asset.get_rendered_data(data_only=True)
+                else:
+                    QMessageBox.warning(self, "ISODATA", f"Failed to load mask: {mask_name}")
             else:
                 mask_root_name = "IS"
 
@@ -1361,12 +1360,13 @@ class MainWindow(QMainWindow):
 
                 # Find a unique name for the threshold mask
                 idx = 1
-                while os.path.exists(os.path.join(mask_dir, f"ThresholdMask_{idx}.npy")):
+                while os.path.exists(os.path.join(mask_dir, f"ThresholdMask_{idx}.png")):
                     idx += 1
-                mask_name = f"ThresholdMask_{idx}.npy"
-                np.save(os.path.join(mask_dir, mask_name), binary_mask)
+                mask_name = f"ThresholdMask_{idx}.png"
+                cv2.imwrite(os.path.join(mask_dir, mask_name), binary_mask.astype(np.uint8))
 
                 self.statusBar().showMessage(f"Threshold mask {mask_name} created.", 3000)
+                self.asset_manager.scan_assets()
                 self._update_mask_list()
             except Exception as e:
                 QMessageBox.critical(self, "Threshold Error", f"An error occurred: {str(e)}")
@@ -1388,15 +1388,14 @@ class MainWindow(QMainWindow):
             return
 
         mask_name = selected_items[0].text()
-        mask_dir = os.path.join(self.working_dir, "Cluster Masks")
-        mask_path = os.path.join(mask_dir, mask_name)
-
-        if not os.path.exists(mask_path):
-            QMessageBox.warning(self, "Refine Mask", f"Mask file not found: {mask_path}")
+        mask_asset = self.asset_manager.get_mask_by_name(mask_name)
+        if not mask_asset:
             return
 
         try:
-            mask = np.load(mask_path)
+            mask = mask_asset.get_rendered_data(data_only=True)
+            if mask is None:
+                raise ValueError("Failed to load mask data.")
         except Exception as e:
             QMessageBox.critical(self, "Refine Mask", f"Failed to load mask: {str(e)}")
             return
@@ -1419,12 +1418,14 @@ class MainWindow(QMainWindow):
                 )
                 
                 # Save the new mask
+                mask_dir = os.path.join(self.working_dir, "Cluster Masks")
                 base_name = os.path.splitext(mask_name)[0]
-                refined_mask_name = f"{base_name}_refined.npy"
+                refined_mask_name = f"{base_name}_refined.png"
                 refined_mask_path = os.path.join(mask_dir, refined_mask_name)
                 
-                np.save(refined_mask_path, refined_mask)
+                cv2.imwrite(refined_mask_path, refined_mask.astype(np.uint8))
                 
+                self.asset_manager.scan_assets()
                 self._update_mask_list()
                 self.statusBar().showMessage(f"Refined mask {refined_mask_name} saved.", 3000)
                 QMessageBox.information(self, "Refine Mask", f"Refined mask saved as {refined_mask_name}")
@@ -1444,15 +1445,14 @@ class MainWindow(QMainWindow):
             return
 
         mask_name = selected_items[0].text()
-        mask_dir = os.path.join(self.working_dir, "Cluster Masks")
-        mask_path = os.path.join(mask_dir, mask_name)
-
-        if not os.path.exists(mask_path):
-            QMessageBox.warning(self, "Properties Table", f"Mask file not found: {mask_path}")
+        mask_asset = self.asset_manager.get_mask_by_name(mask_name)
+        if not mask_asset:
             return
 
         try:
-            mask = np.load(mask_path)
+            mask = mask_asset.get_rendered_data(data_only=True)
+            if mask is None:
+                raise ValueError("Failed to load mask data.")
             properties = mask_refinement.get_mask_properties(mask)
             
             if not properties:
@@ -1492,10 +1492,18 @@ class MainWindow(QMainWindow):
         
         # Color submenu
         color_menu = menu.addMenu("Color")
-        for color_name in ["red", "green", "blue", "cyan", "magenta", "yellow", "white"]:
+        for color_name in ["grayscale", "red", "green", "blue", "cyan", "magenta", "yellow", "white"]:
             action = QAction(color_name.capitalize(), self)
             action.triggered.connect(lambda checked=False, c=color_name: self._change_color(name, c, is_mask=True))
             color_menu.addAction(action)
+
+        mask_asset = self.asset_manager.get_mask_by_name(name)
+        if mask_asset:
+            invert_action = QAction("Invert", self)
+            invert_action.setCheckable(True)
+            invert_action.setChecked(mask_asset.pipeline.config.get("invert", False))
+            invert_action.triggered.connect(lambda: self._toggle_transform(mask_asset, "invert"))
+            menu.addAction(invert_action)
 
         rename_action = QAction("Rename", self)
         rename_action.triggered.connect(lambda: self._rename_item(item, "Cluster Masks", self.mask_list))
@@ -1587,8 +1595,13 @@ class MainWindow(QMainWindow):
             asset.pipeline.config["invert"] = False
             asset.save_project()
         
+        for name, asset in self.asset_manager.masks.items():
+            asset.pipeline.config["invert"] = False
+            asset.save_project()
+        
         self.cached_composite = None
         self._update_asset_list()
+        self._update_mask_list()
         self._refresh_viewer()
 
     def _undo_rotation_all(self):
@@ -1606,8 +1619,14 @@ class MainWindow(QMainWindow):
             asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "rotate"]
             asset.save_project()
         
+        for name, asset in self.asset_manager.masks.items():
+            transforms = asset.pipeline.config.get("transforms", [])
+            asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "rotate"]
+            asset.save_project()
+        
         self.cached_composite = None
         self._update_asset_list()
+        self._update_mask_list()
         self._refresh_viewer()
 
     def _undo_crop_all(self):
@@ -1625,8 +1644,14 @@ class MainWindow(QMainWindow):
             asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "crop"]
             asset.save_project()
         
+        for name, asset in self.asset_manager.masks.items():
+            transforms = asset.pipeline.config.get("transforms", [])
+            asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "crop"]
+            asset.save_project()
+        
         self.cached_composite = None
         self._update_asset_list()
+        self._update_mask_list()
         self._refresh_viewer()
 
 
@@ -1641,6 +1666,7 @@ class MainWindow(QMainWindow):
         if asset:
             asset.pipeline.config["color"] = color_name
             asset.save_project()
+            asset.update_display_png()
             self.cached_composite = None
             self._update_asset_list()
             self._refresh_viewer()
@@ -1648,6 +1674,7 @@ class MainWindow(QMainWindow):
     def _toggle_transform(self, asset, key):
         asset.pipeline.config[key] = not asset.pipeline.config.get(key, False)
         asset.save_project()
+        asset.update_display_png()
         self.cached_composite = None
         self._update_asset_list()
         self._refresh_viewer()
@@ -1665,8 +1692,16 @@ class MainWindow(QMainWindow):
         for name, asset in self.asset_manager.images.items():
             asset.pipeline.config["invert"] = not asset.pipeline.config.get("invert", False)
             asset.save_project()
+            asset.update_display_png()
+        
+        for name, asset in self.asset_manager.masks.items():
+            asset.pipeline.config["invert"] = not asset.pipeline.config.get("invert", False)
+            asset.save_project()
+            asset.update_display_png()
+            
         self.cached_composite = None
         self._update_asset_list()
+        self._update_mask_list()
         self._refresh_viewer()
 
     def _apply_filter_to_all(self, filter_name):
@@ -1693,6 +1728,7 @@ class MainWindow(QMainWindow):
                     asset.pipeline.config["filter_params"] = {}
                 asset.pipeline.config["filter_params"][filter_name] = params
                 asset.save_project()
+                asset.update_display_png()
             self.cached_composite = None
             self._update_asset_list()
             self._refresh_viewer()
@@ -1715,9 +1751,16 @@ class MainWindow(QMainWindow):
         for name, asset in self.asset_manager.images.items():
             asset.pipeline.config.setdefault("transforms", []).append({"type": "crop", "params": rect})
             asset.save_project()
+            asset.update_display_png()
+        
+        for name, asset in self.asset_manager.masks.items():
+            asset.pipeline.config.setdefault("transforms", []).append({"type": "crop", "params": rect})
+            asset.save_project()
+            asset.update_display_png()
         
         self.cached_composite = None
         self._update_asset_list()
+        self._update_mask_list()
         self._refresh_viewer()
         self.viewer_view.clear_selection()
 
@@ -1771,17 +1814,39 @@ class MainWindow(QMainWindow):
                 return
             msg = f"This rotation of {angle} degrees will be applied to ALL loaded images. Do you want to continue?"
 
+        fill_color, ok = QInputDialog.getItem(self, "Rotation Padding", 
+                                        "Select padding color:", 
+                                        ["Black", "White"], 0, False)
+        if not ok:
+            return
+
         reply = QMessageBox.warning(self, "Apply to All", msg,
                                   QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.No:
             return
 
         for name, asset in self.asset_manager.images.items():
-            asset.pipeline.config.setdefault("transforms", []).append({"type": "rotate", "angle": angle})
+            asset.pipeline.config.setdefault("transforms", []).append({
+                "type": "rotate", 
+                "angle": angle,
+                "fill_color": fill_color.lower()
+            })
             asset.save_project()
+            asset.update_display_png()
+
+        for name, asset in self.asset_manager.masks.items():
+            asset.pipeline.config.setdefault("transforms", []).append({
+                "type": "rotate", 
+                "angle": angle,
+                "fill_color": fill_color.lower()
+            })
+            asset.save_project()
+            asset.update_display_png()
+
         self.cached_composite = None
         self.viewer_view.clear_rotation_line()
         self._update_asset_list()
+        self._update_mask_list()
         self._refresh_viewer()
 
     def _export_modified_images(self):
@@ -1861,7 +1926,7 @@ class MainWindow(QMainWindow):
                 name = item.text()
 
                 # Move to deleted assets in JSON
-                self.asset_manager.move_to_deleted_assets(name, "Mask")
+                self.asset_manager.delete_mask(name)
 
                 path = os.path.join(mask_dir, name)
                 if os.path.exists(path):
@@ -1910,8 +1975,8 @@ class MainWindow(QMainWindow):
         if not ok or not new_name.strip():
             return
 
-        if not new_name.endswith(".npy"):
-            new_name += ".npy"
+        if not new_name.lower().endswith(".png"):
+            new_name += ".png"
 
         mask_dir = os.path.join(self.working_dir, "Cluster Masks")
         output_path = os.path.join(mask_dir, new_name)
@@ -1927,19 +1992,22 @@ class MainWindow(QMainWindow):
             for item in selected_items:
                 mask_name = item.text()
                 source_masks.append(mask_name)
-                mask_path = os.path.join(mask_dir, mask_name)
-                mask = np.load(mask_path)
+                mask_asset = self.asset_manager.get_mask_by_name(mask_name)
+                if mask_asset:
+                    mask = mask_asset.get_rendered_data(data_only=True)
+                else:
+                    continue
                 
                 if merged_mask is None:
                     merged_mask = mask.astype(bool)
                 else:
-                    if mask.shape != merged_mask.shape:
+                    if mask.shape[:2] != merged_mask.shape[:2]:
                         mask = cv2.resize(mask.astype(np.uint8), 
                                           (merged_mask.shape[1], merged_mask.shape[0]), 
                                           interpolation=cv2.INTER_NEAREST).astype(bool)
                     merged_mask = np.logical_or(merged_mask, mask.astype(bool))
 
-            np.save(output_path, merged_mask.astype(np.uint8))
+            cv2.imwrite(output_path, merged_mask.astype(np.uint8))
 
             # Update Project JSON
             try:
@@ -1972,6 +2040,7 @@ class MainWindow(QMainWindow):
             except Exception as json_err:
                 print(f"Failed to update project JSON: {json_err}")
 
+            self.asset_manager.scan_assets()
             self._update_mask_list()
             QMessageBox.information(self, "Merge Masks", f"Successfully merged masks into {new_name}")
         except Exception as e:
@@ -2000,12 +2069,15 @@ class MainWindow(QMainWindow):
                     if self.preview_mask is not None:
                         h, w = self.preview_mask.shape
                     else:
-                        first_mask_path = os.path.join(self.working_dir, "Cluster Masks", list(self.visible_masks)[0])
-                        if os.path.exists(first_mask_path):
-                            m = np.load(first_mask_path)
-                            h, w = m.shape
+                        mask_asset = self.asset_manager.get_mask_by_name(list(self.visible_masks)[0])
+                        if mask_asset:
+                            m = mask_asset.get_rendered_data(data_only=True)
+                            if m is not None:
+                                h, w = m.shape
+                            else:
+                                h, w = 1000, 1000 # Fallback
                         else:
-                            return
+                            h, w = 1000, 1000
                     composite_rgb = np.zeros((h, w, 3), dtype=np.uint8)
                 else:
                     # Use qimage2ndarray to convert QImage to numpy RGB safely
@@ -2013,10 +2085,13 @@ class MainWindow(QMainWindow):
 
                 if self.visible_masks and self.working_dir:
                     for mask_name in sorted(self.visible_masks):
-                        mask_path = os.path.join(self.working_dir, "Cluster Masks", mask_name)
-                        if os.path.exists(mask_path):
-                            mask = np.load(mask_path)
-                            if mask.shape != composite_rgb.shape[:2]:
+                        mask_asset = self.asset_manager.get_mask_by_name(mask_name)
+                        if mask_asset:
+                            mask = mask_asset.get_rendered_data(data_only=True)
+                            if mask is None:
+                                continue
+                                
+                            if mask.shape[:2] != composite_rgb.shape[:2]:
                                 mask = cv2.resize(mask, (composite_rgb.shape[1], composite_rgb.shape[0]), interpolation=cv2.INTER_NEAREST)
                             
                             # Generate a color for the mask or use the selected one

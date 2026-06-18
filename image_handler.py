@@ -83,13 +83,15 @@ class ImageDisplayHandler:
             if not image_asset:
                 continue
             
-            data = image_asset.get_rendered_data()
+            data = image_asset.get_rendered_data(for_display=True)
             if data is None:
                 continue
 
             norm_data = data 
             
-            if norm_data.max() > 1.0 or norm_data.min() < 0.0:
+            # Since for_display=True already normalizes if contrast_stretch is not on, 
+            # and we need values in 0-1 range for composite building.
+            if norm_data.max() > 1.01 or norm_data.min() < -0.01:
                 d_min, d_max = norm_data.min(), norm_data.max()
                 if d_max > d_min:
                     norm_data = (norm_data - d_min) / (d_max - d_min)
