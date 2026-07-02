@@ -45,6 +45,7 @@ class MainWindow(QMainWindow):
         self.preview_mask = None
         self.preview_color = QColor(255, 255, 255) # White for preview
         self.graphs_window = None
+        self.stop_btn = None
 
         self._create_menu_bar()
         self._create_status_bar()
@@ -128,6 +129,7 @@ class MainWindow(QMainWindow):
         mask_btn_layout.addStretch()
 
         self.mask_list = QListWidget()
+        self.mask_list.setIconSize(QSize(100, 50))
         self.mask_list.setSelectionMode(QListWidget.MultiSelection)
         self.mask_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.mask_list.customContextMenuRequested.connect(self._show_mask_context_menu)
@@ -315,6 +317,27 @@ class MainWindow(QMainWindow):
         properties_table_action = QAction("Properties Table", self)
         properties_table_action.triggered.connect(self._show_mask_properties)
         mask_menu.addAction(properties_table_action)
+
+        # Create stop button for clustering
+        self.stop_btn = QPushButton("Stop Clustering", self)
+        self.stop_btn.setStyleSheet("background-color: #ff4d4d; color: white; font-weight: bold; border: none; padding: 5px 10px;")
+        self.stop_btn.clicked.connect(self._stop_clustering)
+        self.stop_btn.hide()
+        
+        # Position it in the upper right
+        menu_bar.setCornerWidget(self.stop_btn, Qt.TopRightCorner)
+
+    def _stop_clustering(self):
+        if hasattr(self, 'clustering_thread') and self.clustering_thread.isRunning():
+            reply = QMessageBox.question(self, "Stop Clustering", "Are you sure you want to stop the clustering process?", 
+                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                self.clustering_thread.terminate()
+                self.clustering_thread.wait()
+                QApplication.restoreOverrideCursor()
+                self.statusBar().showMessage("Clustering stopped by user.")
+                if self.stop_btn:
+                    self.stop_btn.hide()
         
     def _home_triggered(self):
         directory = QFileDialog.getExistingDirectory(self, "Select Working Directory")
@@ -401,6 +424,9 @@ class MainWindow(QMainWindow):
             asset = self.asset_manager.get_image_by_name(name)
             item = QListWidgetItem(name)
             qimg = asset.to_qimage()
+            if qimg.isNull():
+                qimg = QImage(100, 100, QImage.Format_ARGB32)
+                qimg.fill(Qt.black)
             item.setIcon(QPixmap.fromImage(qimg.scaled(100, 100, Qt.KeepAspectRatio)))
             self.image_list.addItem(item)
             if self.image_handler.is_visible(name):
@@ -418,7 +444,42 @@ class MainWindow(QMainWindow):
             asset = self.asset_manager.get_mask_by_name(name)
             item = QListWidgetItem(name)
             qimg = asset.to_qimage()
-            item.setIcon(QPixmap.fromImage(qimg.scaled(100, 100, Qt.KeepAspectRatio)))
+            if qimg.isNull():
+                qimg = QImage(100, 100, QImage.Format_ARGB32)
+                qimg.fill(Qt.black)
+            
+            # Create a composite icon with a color square next to the thumbnail
+            thumbnail_size = 50
+            thumbnail = qimg.scaled(thumbnail_size, thumbnail_size, Qt.KeepAspectRatio)
+            
+            # Icon size is 100x50 (50 for thumb, 50 for color square)
+            icon_width = 100
+            icon_height = 50
+            composite = QImage(icon_width, icon_height, QImage.Format_ARGB32)
+            composite.fill(Qt.transparent)
+            
+            painter = QPainter(composite)
+            # Draw thumbnail centered in the left half
+            x = (thumbnail_size - thumbnail.width()) // 2
+            y = (thumbnail_size - thumbnail.height()) // 2
+            painter.drawImage(x, y, thumbnail)
+            
+            # Draw color square in the right half
+            color_name = asset.pipeline.config.get("color", "grayscale")
+            if color_name == "grayscale":
+                qcolor = self.get_mask_color(name)
+            else:
+                color_rgb = ImageDisplayHandler.COLORS.get(color_name, (1, 1, 1))
+                qcolor = QColor(int(color_rgb[0]*255), int(color_rgb[1]*255), int(color_rgb[2]*255))
+            
+            # Make the square the same size as the thumbnail's bounding box (50x50)
+            square_size = 46 # Slightly smaller to have some padding/border visibility
+            painter.setBrush(QBrush(qcolor))
+            painter.setPen(QPen(Qt.black, 1))
+            painter.drawRect(50 + (50 - square_size) // 2, (50 - square_size) // 2, square_size, square_size)
+            painter.end()
+            
+            item.setIcon(QPixmap.fromImage(composite))
             self.mask_list.addItem(item)
             if name in self.visible_masks:
                 item.setSelected(True)
@@ -448,11 +509,11 @@ class MainWindow(QMainWindow):
             return
 
         selected_masks = self.mask_list.selectedItems()
-        if len(selected_masks) != 1:
-            QMessageBox.warning(self, "Graphing", "Please select exactly one cluster mask.")
+        if not selected_masks:
+            QMessageBox.warning(self, "Graphing", "Please select at least one cluster mask.")
             return
         
-        mask_name = selected_masks[0].text()
+        mask_names = [item.text() for item in selected_masks]
 
         selected_images = self.image_list.selectedItems()
         if not selected_images:
@@ -465,17 +526,9 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            self.statusBar().showMessage("Calculating histogram data and generating histograms...")
             QApplication.setOverrideCursor(Qt.WaitCursor)
             
-            measurements = measure_utilities.calculate_mask_measurements(self.asset_manager, image_names, mask_name)
-            if not measurements:
-                QMessageBox.critical(self, "Graphing", "Failed to calculate histogram data.")
-                return
-
-            graph_dir = os.path.join(self.working_dir, "Graphs")
-            
-            # Update project JSON with histograms
+            # Setup project JSON info
             image_list = self.asset_manager.get_image_list()
             project_name = "project_"
             if image_list:
@@ -485,95 +538,96 @@ class MainWindow(QMainWindow):
             
             json_dir = os.path.join(self.working_dir, "JSON")
             project_json_path = os.path.join(json_dir, f"{project_name}.json")
+            graph_dir = os.path.join(self.working_dir, "Graphs")
 
-            project_data = {}
-            if os.path.exists(project_json_path):
-                try:
-                    with open(project_json_path, 'r') as f:
-                        project_data = json.load(f)
-                except:
-                    pass
-
-            # Find mask metadata if available
-            mask_metadata = project_data.get("Masks", {}).get(mask_name, {})
-            source_masks = mask_metadata.get("source_masks")
-
-            hist_files = histogram_plots.create_histograms(measurements, mask_name, graph_dir, source_masks=source_masks)
-            json_measurements_path = export_plot_utils.save_measurements_json(measurements, mask_name, graph_dir)
-            csv_measurements_path = export_plot_utils.save_group_csv(measurements, mask_name, graph_dir)
-
-            if "Histograms" not in project_data:
-                project_data["Histograms"] = {}
-
-            cluster_method = mask_metadata.get("cluster_method", "Unknown")
-
-            for hist_file in hist_files:
-                hist_path = os.path.join(graph_dir, hist_file)
+            for i, mask_name in enumerate(mask_names):
+                self.statusBar().showMessage(f"Processing mask {i+1}/{len(mask_names)}: {mask_name}...")
                 
-                # We need to find the measurements for this specific histogram file
-                # measurements is a dict: {image_name: values}
-                # hist_files is a list of filenames like: <Mask Name>_<Well Position>_<Probe>.png
-                
-                stats = {
-                    "mean": 0.0, "median": 0.0, "std": 0.0, "skewness": 0.0, "kurtosis": 0.0,
-                    "q05": 0.0, "q25": 0.0, "q75": 0.0, "q95": 0.0, "entropy": 0.0
-                }
-                
-                # Match hist_file back to image_name to get values
-                sample_name = "Unknown"
-                slide_number = "Unknown"
-                well_position = "Unknown"
-                probe_name = "Unknown"
-                
-                for img_name, values in measurements.items():
-                    # Check if this img_name matches the hist_file
-                    from export_plot_utils import get_safe_histogram_name
-                    expected_name = f"{get_safe_histogram_name(img_name, mask_name)}.png"
+                measurements = measure_utilities.calculate_mask_measurements(self.asset_manager, image_names, mask_name)
+                if not measurements:
+                    continue
+
+                project_data = {}
+                if os.path.exists(project_json_path):
+                    try:
+                        with open(project_json_path, 'r') as f:
+                            project_data = json.load(f)
+                    except:
+                        pass
+
+                # Find mask metadata if available
+                mask_metadata = project_data.get("Masks", {}).get(mask_name, {})
+                source_masks = mask_metadata.get("source_masks")
+
+                hist_files = histogram_plots.create_histograms(measurements, mask_name, graph_dir, source_masks=source_masks)
+                json_measurements_path = export_plot_utils.save_measurements_json(measurements, mask_name, graph_dir)
+                csv_measurements_path = export_plot_utils.save_group_csv(measurements, mask_name, graph_dir)
+
+                if "Histograms" not in project_data:
+                    project_data["Histograms"] = {}
+
+                cluster_method = mask_metadata.get("cluster_method", "Unknown")
+
+                for hist_file in hist_files:
+                    hist_path = os.path.join(graph_dir, hist_file)
                     
-                    if hist_file == expected_name:
-                        # Extract metadata for project JSON documentation
-                        parts = img_name.split('_')
-                        if len(parts) >= 6:
-                            sample_name = parts[0]
-                            slide_number = parts[1]
-                            well_position = parts[4]
-                            probe_name = os.path.splitext(parts[5])[0]
-                            
-                        v = np.array(values)
-                        if len(v) > 0:
-                            stats["mean"] = float(np.mean(v))
-                            stats["median"] = float(np.median(v))
-                            stats["std"] = float(np.std(v))
-                            stats["skewness"] = float(scipy.stats.skew(v))
-                            stats["kurtosis"] = float(scipy.stats.kurtosis(v))
-                            stats["q05"] = float(np.percentile(v, 5))
-                            stats["q25"] = float(np.percentile(v, 25))
-                            stats["q75"] = float(np.percentile(v, 75))
-                            stats["q95"] = float(np.percentile(v, 95))
-                            
-                            # Entropy: using histogram-based approach
-                            try:
-                                counts, _ = np.histogram(v, bins='auto', density=True)
-                                stats["entropy"] = float(scipy.stats.entropy(counts)) if len(counts) > 0 else 0.0
-                            except:
-                                stats["entropy"] = 0.0
-                        break
+                    stats = {
+                        "mean": 0.0, "median": 0.0, "std": 0.0, "skewness": 0.0, "kurtosis": 0.0,
+                        "q05": 0.0, "q25": 0.0, "q75": 0.0, "q95": 0.0, "entropy": 0.0
+                    }
+                    
+                    # Match hist_file back to image_name to get values
+                    sample_name = "Unknown"
+                    slide_number = "Unknown"
+                    well_position = "Unknown"
+                    probe_name = "Unknown"
+                    
+                    for img_name, values in measurements.items():
+                        from export_plot_utils import get_safe_histogram_name
+                        expected_name = f"{get_safe_histogram_name(img_name, mask_name)}.png"
+                        
+                        if hist_file == expected_name:
+                            parts = img_name.split('_')
+                            if len(parts) >= 6:
+                                sample_name = parts[0]
+                                slide_number = parts[1]
+                                well_position = parts[4]
+                                probe_name = os.path.splitext(parts[5])[0]
+                                
+                            v = np.array(values)
+                            if len(v) > 0:
+                                stats["mean"] = float(np.mean(v))
+                                stats["median"] = float(np.median(v))
+                                stats["std"] = float(np.std(v))
+                                stats["skewness"] = float(scipy.stats.skew(v))
+                                stats["kurtosis"] = float(scipy.stats.kurtosis(v))
+                                stats["q05"] = float(np.percentile(v, 5))
+                                stats["q25"] = float(np.percentile(v, 25))
+                                stats["q75"] = float(np.percentile(v, 75))
+                                stats["q95"] = float(np.percentile(v, 95))
+                                
+                                try:
+                                    counts, _ = np.histogram(v, bins='auto', density=True)
+                                    stats["entropy"] = float(scipy.stats.entropy(counts)) if len(counts) > 0 else 0.0
+                                except:
+                                    stats["entropy"] = 0.0
+                            break
 
-                project_data["Histograms"][hist_file] = {
-                    "path": os.path.abspath(hist_path),
-                    "sample": sample_name,
-                    "slide": slide_number,
-                    "well": well_position,
-                    "probe": probe_name,
-                    "linked_mask": mask_name,
-                    "cluster_method": cluster_method,
-                    "histograms_json": os.path.abspath(json_measurements_path),
-                    "histograms_csv": os.path.abspath(csv_measurements_path),
-                    **stats
-                }
+                    project_data["Histograms"][hist_file] = {
+                        "path": os.path.abspath(hist_path),
+                        "sample": sample_name,
+                        "slide": slide_number,
+                        "well": well_position,
+                        "probe": probe_name,
+                        "linked_mask": mask_name,
+                        "cluster_method": cluster_method,
+                        "histograms_json": os.path.abspath(json_measurements_path),
+                        "histograms_csv": os.path.abspath(csv_measurements_path),
+                        **stats
+                    }
 
-            with open(project_json_path, 'w') as f:
-                json.dump(project_data, f, indent=4)
+                with open(project_json_path, 'w') as f:
+                    json.dump(project_data, f, indent=4)
 
             self.statusBar().showMessage("Graphing completed.", 3000)
             self._update_graph_list()
@@ -1054,12 +1108,16 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Clustering Error", f"An error occurred while saving results: {str(e)}")
         finally:
+            if self.stop_btn:
+                self.stop_btn.hide()
             QApplication.restoreOverrideCursor()
             if hasattr(self, 'clustering_thread'):
                 self.clustering_thread.quit()
                 self.clustering_thread.wait()
 
     def _on_clustering_error(self, error_msg):
+        if self.stop_btn:
+            self.stop_btn.hide()
         QApplication.restoreOverrideCursor()
         QMessageBox.critical(self, "Clustering Error", f"An error occurred during clustering: {error_msg}")
         if hasattr(self, 'clustering_thread'):
@@ -1116,6 +1174,8 @@ class MainWindow(QMainWindow):
                 mask_root_name = "KM"
             
             try:
+                if self.stop_btn:
+                    self.stop_btn.show()
                 self.statusBar().showMessage("Running K-Means...")
                 QApplication.setOverrideCursor(Qt.WaitCursor)
                 
@@ -1192,6 +1252,8 @@ class MainWindow(QMainWindow):
                 mask_root_name = "GM"
 
             try:
+                if self.stop_btn:
+                    self.stop_btn.show()
                 self.statusBar().showMessage("Running Gaussian Mixture...")
                 QApplication.setOverrideCursor(Qt.WaitCursor)
                 
@@ -1268,6 +1330,8 @@ class MainWindow(QMainWindow):
                 mask_root_name = "IS"
 
             try:
+                if self.stop_btn:
+                    self.stop_btn.show()
                 self.statusBar().showMessage("Running ISODATA...")
                 QApplication.setOverrideCursor(Qt.WaitCursor)
                 
@@ -1541,14 +1605,33 @@ class MainWindow(QMainWindow):
             try:
                 os.rename(old_path, new_path)
                 
-                # Update tracking if necessary (e.g., visible masks)
+        # Update tracking if necessary (e.g., visible masks)
                 if subfolder == "Cluster Masks":
                     if old_name in self.visible_masks:
                         self.visible_masks.remove(old_name)
                         self.visible_masks.add(new_filename)
+                    
+                    self.image_handler.rename_asset(old_name, new_filename)
+                    
+                    # Update the asset's internal knowledge of its name/path if it's already loaded
+                    asset = self.asset_manager.get_mask_by_name(old_name)
+                    if asset:
+                        asset.path = new_path
+                        # Rename in asset_manager maps
+                        del self.asset_manager.masks[old_name]
+                        self.asset_manager.masks[new_filename] = asset
+                    
                     self._update_mask_list()
                 elif subfolder == "Graphs":
                     self._update_graph_list()
+                elif subfolder == "Images":
+                    self.image_handler.rename_asset(old_name, new_filename)
+                    asset = self.asset_manager.get_image_by_name(old_name)
+                    if asset:
+                        asset.path = new_path
+                        del self.asset_manager.images[old_name]
+                        self.asset_manager.images[new_filename] = asset
+                    self._update_asset_list()
                     
             except Exception as e:
                 QMessageBox.critical(self, "Rename Error", f"Failed to rename file: {str(e)}")
@@ -1594,10 +1677,12 @@ class MainWindow(QMainWindow):
         for name, asset in self.asset_manager.images.items():
             asset.pipeline.config["invert"] = False
             asset.save_project()
+            asset.update_display_png()
         
         for name, asset in self.asset_manager.masks.items():
             asset.pipeline.config["invert"] = False
             asset.save_project()
+            asset.update_display_png()
         
         self.cached_composite = None
         self._update_asset_list()
@@ -1618,11 +1703,13 @@ class MainWindow(QMainWindow):
             transforms = asset.pipeline.config.get("transforms", [])
             asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "rotate"]
             asset.save_project()
+            asset.update_display_png()
         
         for name, asset in self.asset_manager.masks.items():
             transforms = asset.pipeline.config.get("transforms", [])
             asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "rotate"]
             asset.save_project()
+            asset.update_display_png()
         
         self.cached_composite = None
         self._update_asset_list()
@@ -1643,11 +1730,13 @@ class MainWindow(QMainWindow):
             transforms = asset.pipeline.config.get("transforms", [])
             asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "crop"]
             asset.save_project()
+            asset.update_display_png()
         
         for name, asset in self.asset_manager.masks.items():
             transforms = asset.pipeline.config.get("transforms", [])
             asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "crop"]
             asset.save_project()
+            asset.update_display_png()
         
         self.cached_composite = None
         self._update_asset_list()
@@ -1658,7 +1747,13 @@ class MainWindow(QMainWindow):
     def _change_color(self, name, color_name, is_mask=False):
         if is_mask:
             self.image_handler.set_asset_color(name, color_name)
+            asset = self.asset_manager.get_mask_by_name(name)
+            if asset:
+                asset.pipeline.config["color"] = color_name
+                asset.save_project()
+                asset.update_display_png()
             self.cached_composite = None
+            self._update_mask_list()
             self._refresh_viewer()
             return
 
@@ -2052,6 +2147,33 @@ class MainWindow(QMainWindow):
         self.cached_composite = None
         self._refresh_viewer()
 
+    def get_mask_color(self, mask_name):
+        # Prioritize asset config color if available
+        asset = self.asset_manager.get_mask_by_name(mask_name)
+        color_name = "grayscale"
+        if asset:
+            color_name = asset.pipeline.config.get("color", "grayscale")
+        
+        # Fallback to image_handler if not in asset config
+        if color_name == "grayscale":
+            color_name = self.image_handler.get_asset_color(mask_name)
+
+        if color_name != "grayscale":
+            rgb = self.image_handler.COLORS.get(color_name, (1, 1, 1))
+            return QColor(int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255))
+        else:
+            try:
+                if mask_name.startswith("KC_"):
+                    idx = int(mask_name.split('_')[1].split('.')[0])
+                elif mask_name.startswith("ThresholdMask_"):
+                    idx = int(mask_name.split('_')[1].split('.')[0]) + 100
+                else:
+                    idx = hash(mask_name)
+            except:
+                idx = hash(mask_name)
+            color_hue = (idx * 137.5) % 360
+            return QColor.fromHsvF(color_hue/360.0, 1.0, 1.0)
+
     def _refresh_viewer(self):
         visible_names = self.image_handler.visible_assets
         if not visible_names and not self.visible_masks and self.preview_mask is None:
@@ -2071,7 +2193,7 @@ class MainWindow(QMainWindow):
                     else:
                         mask_asset = self.asset_manager.get_mask_by_name(list(self.visible_masks)[0])
                         if mask_asset:
-                            m = mask_asset.get_rendered_data(data_only=True)
+                            m = mask_asset.get_rendered_data(for_display=True, use_cache=True)
                             if m is not None:
                                 h, w = m.shape
                             else:
@@ -2087,7 +2209,7 @@ class MainWindow(QMainWindow):
                     for mask_name in sorted(self.visible_masks):
                         mask_asset = self.asset_manager.get_mask_by_name(mask_name)
                         if mask_asset:
-                            mask = mask_asset.get_rendered_data(data_only=True)
+                            mask = mask_asset.get_rendered_data(for_display=True, use_cache=True)
                             if mask is None:
                                 continue
                                 
@@ -2095,24 +2217,8 @@ class MainWindow(QMainWindow):
                                 mask = cv2.resize(mask, (composite_rgb.shape[1], composite_rgb.shape[0]), interpolation=cv2.INTER_NEAREST)
                             
                             # Generate a color for the mask or use the selected one
-                            color_name = self.image_handler.get_asset_color(mask_name)
-                            if color_name != "grayscale":
-                                # Use defined colors from ImageDisplayHandler
-                                rgb = self.image_handler.COLORS.get(color_name, (1, 1, 1))
-                                r, g, b = int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255)
-                            else:
-                                try:
-                                    if mask_name.startswith("KC_"):
-                                        idx = int(mask_name.split('_')[1].split('.')[0])
-                                    elif mask_name.startswith("ThresholdMask_"):
-                                        idx = int(mask_name.split('_')[1].split('.')[0]) + 100
-                                    else:
-                                        idx = hash(mask_name)
-                                except:
-                                    idx = hash(mask_name)
-                                color_hue = (idx * 137.5) % 360
-                                color = QColor.fromHsvF(color_hue/360.0, 1.0, 1.0)
-                                r, g, b = color.red(), color.green(), color.blue()
+                            color = self.get_mask_color(mask_name)
+                            r, g, b = color.red(), color.green(), color.blue()
                             
                             # Blend mask using OpenCV/NumPy
                             mask_bool = mask.astype(bool)

@@ -83,7 +83,7 @@ class ImageDisplayHandler:
             if not image_asset:
                 continue
             
-            data = image_asset.get_rendered_data(for_display=True)
+            data = image_asset.get_rendered_data(for_display=True, use_cache=True)
             if data is None:
                 continue
 
@@ -108,7 +108,9 @@ class ImageDisplayHandler:
                 # Resize image to match current composite
                 norm_data = cv2.resize(norm_data, (target_shape[1], target_shape[0]), interpolation=cv2.INTER_LINEAR)
 
-            color_name = image_asset.pipeline.config.get("color") or self.get_asset_color(name)
+            color_name = image_asset.pipeline.config.get("color")
+            if not color_name or color_name == "grayscale":
+                color_name = self.get_asset_color(name)
             color_rgb = self.COLORS.get(color_name, (1, 1, 1))
 
             for i in range(3):
@@ -121,7 +123,12 @@ class ImageDisplayHandler:
         composite_rgb = np.clip(composite_rgb, 0, 1)
 
         display_img = np.ascontiguousarray((composite_rgb * 255).astype(np.uint8))
-        return qimage2ndarray.array2qimage(display_img).copy()
+        qimg = qimage2ndarray.array2qimage(display_img)
+        if qimg.isNull():
+            # Create a small black image as fallback
+            qimg = QImage(100, 100, QImage.Format_RGB32)
+            qimg.fill(0)
+        return qimg.copy()
 
     def save_visible(self, asset_manager, output_dir, filename, image_format):
         composite_qimg = self.render_composite(asset_manager)

@@ -161,11 +161,27 @@ class Asset:
                 display_data = np.zeros_like(data, dtype=np.uint8)
         
         display_data = np.ascontiguousarray(display_data)
+
+        # Apply color if specified in pipeline config
+        color_name = self.pipeline.config.get("color", "grayscale")
+        if color_name != "grayscale":
+            from image_handler import ImageDisplayHandler
+            color_rgb = ImageDisplayHandler.COLORS.get(color_name)
+            if color_rgb:
+                # Convert grayscale to RGB and apply tint
+                colored_data = np.zeros((*display_data.shape, 3), dtype=np.uint8)
+                for i in range(3):
+                    colored_data[:, :, i] = (display_data * color_rgb[i]).astype(np.uint8)
+                display_data = colored_data
         
         temp_dir = os.path.join(self.working_dir, "temp_display")
         os.makedirs(temp_dir, exist_ok=True)
         self._display_png_path = os.path.join(temp_dir, f"{self.base_name}.png")
         
+        # If RGB, OpenCV expects BGR
+        if len(display_data.shape) == 3:
+            display_data = cv2.cvtColor(display_data, cv2.COLOR_RGB2BGR)
+
         # Save as 8-bit PNG
         cv2.imwrite(self._display_png_path, display_data)
 
@@ -213,18 +229,57 @@ class Asset:
             
         return self._data
 
-    def get_rendered_data(self, data_only=False, for_display=False):
+    def get_rendered_data(self, data_only=False, for_display=False, use_cache=False):
+        if use_cache and for_display:
+            png_path = self.get_display_png_path()
+            if png_path and os.path.exists(png_path):
+                # Load the 8-bit PNG and normalize back to 0-1 for composite
+                cached_data = cv2.imread(png_path, cv2.IMREAD_UNCHANGED)
+                if cached_data is not None:
+                    if len(cached_data.shape) == 3:
+                        # Preserve intensity from color-tinted cached PNGs.
+                        # Using BGR2GRAY makes blue very dim because blue has low luminance weight.
+                        cached_data = cached_data.max(axis=2)
+                    return cached_data.astype(np.float32) / 255.0
+
         return self.pipeline.apply(self.data, data_only=data_only, for_display=for_display)
 
     def to_qimage(self, for_display=True):
+        img = QImage()
         if for_display:
             png_path = self.get_display_png_path()
             if png_path and os.path.exists(png_path):
-                return QImage(png_path)
-            data = self.get_rendered_data(for_display=True)
+                img = QImage(png_path)
+                # If loading failed for some reason, img will be null
+                if img.isNull():
+                    data = self.get_rendered_data(for_display=True)
+                    img = self._array_to_qimage(data)
+                # If it's already an RGB image from PNG, it might already have color applied
+                elif img.format() == QImage.Format_RGB32 or img.format() == QImage.Format_ARGB32:
+                    return img
+            else:
+                data = self.get_rendered_data(for_display=True)
+                img = self._array_to_qimage(data)
         else:
             data = self.data
+            img = self._array_to_qimage(data)
 
+        if img.isNull():
+            # Create a small empty image as ultimate fallback
+            img = QImage(100, 100, QImage.Format_ARGB32)
+            img.fill(0)
+
+        # Apply color if specified in pipeline config
+        color_name = self.pipeline.config.get("color", "grayscale")
+        if color_name != "grayscale":
+            from image_handler import ImageDisplayHandler
+            color_rgb = ImageDisplayHandler.COLORS.get(color_name)
+            if color_rgb:
+                return self._apply_color_to_qimage(img, color_rgb)
+        
+        return img
+
+    def _array_to_qimage(self, data):
         # Normalize data to 0-255 for display if needed
         if data.max() <= 1.01 and data.min() >= -0.01:
             display_data = (data * 255).astype(np.uint8)
@@ -236,9 +291,36 @@ class Asset:
                 display_data = np.zeros_like(data, dtype=np.uint8)
         
         display_data = np.ascontiguousarray(display_data)
+        qimg = qimage2ndarray.array2qimage(display_data)
+        if qimg.isNull():
+            # Fallback for failed array conversion
+            qimg = QImage(display_data.shape[1], display_data.shape[0], QImage.Format_Grayscale8)
+            qimg.fill(0)
+        return qimg.copy()
+
+    def _apply_color_to_qimage(self, qimg, color_rgb):
+        """Applies a color tint to a grayscale QImage."""
+        if qimg.isNull():
+            return qimg
+
+        if qimg.format() != QImage.Format_RGB32 and qimg.format() != QImage.Format_ARGB32:
+            qimg = qimg.convertToFormat(QImage.Format_ARGB32)
         
-        # Use qimage2ndarray to handle the conversion safely
-        return qimage2ndarray.array2qimage(display_data).copy()
+        # Convert to ndarray for faster processing
+        try:
+            arr = qimage2ndarray.rgb_view(qimg).astype(np.float32)
+        except (ValueError, TypeError):
+            # Fallback if qimage2ndarray fails
+            return qimg
+        
+        # Multiply by color_rgb
+        # color_rgb is (R, G, B) in 0-1 range
+        for i in range(3):
+            arr[:, :, i] *= color_rgb[i]
+        
+        # Clip and convert back to uint8
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+        return qimage2ndarray.array2qimage(arr).copy()
 
 class MaskAsset(Asset):
     def load(self):
@@ -298,10 +380,26 @@ class MaskAsset(Asset):
         
         display_data = np.ascontiguousarray(display_data)
         
+        # Apply color if specified
+        color_name = self.pipeline.config.get("color", "grayscale")
+        if color_name != "grayscale":
+            from image_handler import ImageDisplayHandler
+            color_rgb = ImageDisplayHandler.COLORS.get(color_name)
+            if color_rgb:
+                # Convert grayscale to RGB and apply tint
+                colored_data = np.zeros((*display_data.shape, 3), dtype=np.uint8)
+                for i in range(3):
+                    colored_data[:, :, i] = (display_data * color_rgb[i]).astype(np.uint8)
+                display_data = colored_data
+
         temp_dir = os.path.join(self.working_dir, "temp_display")
         os.makedirs(temp_dir, exist_ok=True)
         self._display_png_path = os.path.join(temp_dir, f"{self.base_name}.png")
         
+        # If RGB, OpenCV expects BGR
+        if len(display_data.shape) == 3:
+            display_data = cv2.cvtColor(display_data, cv2.COLOR_RGB2BGR)
+
         cv2.imwrite(self._display_png_path, display_data)
 
 class AssetManager:
