@@ -125,65 +125,6 @@ class Asset:
         self.name = self.base_name
         self._data = None
         self.pipeline = TransformPipeline()
-        self._display_png_path = None
-
-    def get_display_png_path(self):
-        if self._display_png_path and os.path.exists(self._display_png_path):
-            return self._display_png_path
-        
-        if not self.working_dir:
-            return None
-        
-        temp_dir = os.path.join(self.working_dir, "temp_display")
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        self._display_png_path = os.path.join(temp_dir, f"{self.base_name}.png")
-        self.update_display_png()
-        return self._display_png_path
-
-    def update_display_png(self):
-        """Generates and saves an 8-bit PNG copy of the rendered data for display purposes."""
-        if not self.working_dir:
-            return
-
-        data = self.get_rendered_data(for_display=True)
-        if data is None:
-            return
-
-        # Normalize data to 0-255 8-bit for PNG display
-        if data.max() <= 1.01 and data.min() >= -0.01:
-            display_data = (data * 255).astype(np.uint8)
-        else:
-            d_min, d_max = data.min(), data.max()
-            if d_max > d_min:
-                display_data = ((data - d_min) / (d_max - d_min) * 255).astype(np.uint8)
-            else:
-                display_data = np.zeros_like(data, dtype=np.uint8)
-        
-        display_data = np.ascontiguousarray(display_data)
-
-        # Apply color if specified in pipeline config
-        color_name = self.pipeline.config.get("color", "grayscale")
-        if color_name != "grayscale":
-            from image_handler import ImageDisplayHandler
-            color_rgb = ImageDisplayHandler.COLORS.get(color_name)
-            if color_rgb:
-                # Convert grayscale to RGB and apply tint
-                colored_data = np.zeros((*display_data.shape, 3), dtype=np.uint8)
-                for i in range(3):
-                    colored_data[:, :, i] = (display_data * color_rgb[i]).astype(np.uint8)
-                display_data = colored_data
-        
-        temp_dir = os.path.join(self.working_dir, "temp_display")
-        os.makedirs(temp_dir, exist_ok=True)
-        self._display_png_path = os.path.join(temp_dir, f"{self.base_name}.png")
-        
-        # If RGB, OpenCV expects BGR
-        if len(display_data.shape) == 3:
-            display_data = cv2.cvtColor(display_data, cv2.COLOR_RGB2BGR)
-
-        # Save as 8-bit PNG
-        cv2.imwrite(self._display_png_path, display_data)
 
     def get_json_path(self):
         if not self.working_dir:
@@ -229,42 +170,19 @@ class Asset:
             
         return self._data
 
-    def get_rendered_data(self, data_only=False, for_display=False, use_cache=False):
-        if use_cache and for_display:
-            png_path = self.get_display_png_path()
-            if png_path and os.path.exists(png_path):
-                # Load the 8-bit PNG and normalize back to 0-1 for composite
-                cached_data = cv2.imread(png_path, cv2.IMREAD_UNCHANGED)
-                if cached_data is not None:
-                    if len(cached_data.shape) == 3:
-                        # Preserve intensity from color-tinted cached PNGs.
-                        # Using BGR2GRAY makes blue very dim because blue has low luminance weight.
-                        cached_data = cached_data.max(axis=2)
-                    return cached_data.astype(np.float32) / 255.0
-
+    def get_rendered_data(self, data_only=False, for_display=False):
         return self.pipeline.apply(self.data, data_only=data_only, for_display=for_display)
 
     def to_qimage(self, for_display=True):
-        img = QImage()
+        from image_handler import ImageDisplayHandler
         if for_display:
-            png_path = self.get_display_png_path()
-            if png_path and os.path.exists(png_path):
-                img = QImage(png_path)
-                # If loading failed for some reason, img will be null
-                if img.isNull():
-                    data = self.get_rendered_data(for_display=True)
-                    img = self._array_to_qimage(data)
-                # If it's already an RGB image from PNG, it might already have color applied
-                elif img.format() == QImage.Format_RGB32 or img.format() == QImage.Format_ARGB32:
-                    return img
-            else:
-                data = self.get_rendered_data(for_display=True)
-                img = self._array_to_qimage(data)
+            data = self.get_rendered_data(for_display=True)
         else:
             data = self.data
-            img = self._array_to_qimage(data)
 
-        if img.isNull():
+        img = ImageDisplayHandler.array_to_qimage(data)
+
+        if img is None or img.isNull():
             # Create a small empty image as ultimate fallback
             img = QImage(100, 100, QImage.Format_ARGB32)
             img.fill(0)
@@ -272,55 +190,11 @@ class Asset:
         # Apply color if specified in pipeline config
         color_name = self.pipeline.config.get("color", "grayscale")
         if color_name != "grayscale":
-            from image_handler import ImageDisplayHandler
             color_rgb = ImageDisplayHandler.COLORS.get(color_name)
             if color_rgb:
-                return self._apply_color_to_qimage(img, color_rgb)
+                return ImageDisplayHandler.apply_color_to_qimage(img, color_rgb)
         
         return img
-
-    def _array_to_qimage(self, data):
-        # Normalize data to 0-255 for display if needed
-        if data.max() <= 1.01 and data.min() >= -0.01:
-            display_data = (data * 255).astype(np.uint8)
-        else:
-            d_min, d_max = data.min(), data.max()
-            if d_max > d_min:
-                display_data = ((data - d_min) / (d_max - d_min) * 255).astype(np.uint8)
-            else:
-                display_data = np.zeros_like(data, dtype=np.uint8)
-        
-        display_data = np.ascontiguousarray(display_data)
-        qimg = qimage2ndarray.array2qimage(display_data)
-        if qimg.isNull():
-            # Fallback for failed array conversion
-            qimg = QImage(display_data.shape[1], display_data.shape[0], QImage.Format_Grayscale8)
-            qimg.fill(0)
-        return qimg.copy()
-
-    def _apply_color_to_qimage(self, qimg, color_rgb):
-        """Applies a color tint to a grayscale QImage."""
-        if qimg.isNull():
-            return qimg
-
-        if qimg.format() != QImage.Format_RGB32 and qimg.format() != QImage.Format_ARGB32:
-            qimg = qimg.convertToFormat(QImage.Format_ARGB32)
-        
-        # Convert to ndarray for faster processing
-        try:
-            arr = qimage2ndarray.rgb_view(qimg).astype(np.float32)
-        except (ValueError, TypeError):
-            # Fallback if qimage2ndarray fails
-            return qimg
-        
-        # Multiply by color_rgb
-        # color_rgb is (R, G, B) in 0-1 range
-        for i in range(3):
-            arr[:, :, i] *= color_rgb[i]
-        
-        # Clip and convert back to uint8
-        arr = np.clip(arr, 0, 255).astype(np.uint8)
-        return qimage2ndarray.array2qimage(arr).copy()
 
 class MaskAsset(Asset):
     def load(self):
@@ -356,52 +230,6 @@ class MaskAsset(Asset):
         os.makedirs(json_dir, exist_ok=True)
         return os.path.join(json_dir, self.base_name + ".json")
 
-    def update_display_png(self):
-        """Specialized update for mask display - usually masks don't need contrast stretch etc."""
-        if not self.working_dir:
-            return
-
-        data = self.get_rendered_data(for_display=True)
-        if data is None:
-            return
-
-        # For masks, we want to see them clearly. 
-        # If it's a binary mask (0, 1), scale to 255.
-        if data.max() <= 1.01:
-            display_data = (data * 255).astype(np.uint8)
-        else:
-            # Maybe it's labeled 0, 1, 2... 
-            # We could use a colormap, but for now just normalize to 255
-            d_min, d_max = data.min(), data.max()
-            if d_max > d_min:
-                display_data = ((data - d_min) / (d_max - d_min) * 255).astype(np.uint8)
-            else:
-                display_data = np.zeros_like(data, dtype=np.uint8)
-        
-        display_data = np.ascontiguousarray(display_data)
-        
-        # Apply color if specified
-        color_name = self.pipeline.config.get("color", "grayscale")
-        if color_name != "grayscale":
-            from image_handler import ImageDisplayHandler
-            color_rgb = ImageDisplayHandler.COLORS.get(color_name)
-            if color_rgb:
-                # Convert grayscale to RGB and apply tint
-                colored_data = np.zeros((*display_data.shape, 3), dtype=np.uint8)
-                for i in range(3):
-                    colored_data[:, :, i] = (display_data * color_rgb[i]).astype(np.uint8)
-                display_data = colored_data
-
-        temp_dir = os.path.join(self.working_dir, "temp_display")
-        os.makedirs(temp_dir, exist_ok=True)
-        self._display_png_path = os.path.join(temp_dir, f"{self.base_name}.png")
-        
-        # If RGB, OpenCV expects BGR
-        if len(display_data.shape) == 3:
-            display_data = cv2.cvtColor(display_data, cv2.COLOR_RGB2BGR)
-
-        cv2.imwrite(self._display_png_path, display_data)
-
 class AssetManager:
     def __init__(self):
         self.images = {}
@@ -414,7 +242,6 @@ class AssetManager:
         # Create folder structure
         os.makedirs(os.path.join(path, "Cluster Masks"), exist_ok=True)
         os.makedirs(os.path.join(path, "Graphs"), exist_ok=True)
-        os.makedirs(os.path.join(path, "temp_display"), exist_ok=True)
         json_dir = os.path.join(path, "JSON")
         os.makedirs(json_dir, exist_ok=True)
         os.makedirs(os.path.join(json_dir, "Image JSONs"), exist_ok=True)
@@ -422,12 +249,6 @@ class AssetManager:
         
         self.scan_assets()
         self.update_project_json()
-
-    def cleanup_temp_display(self):
-        if self.working_dir:
-            temp_dir = os.path.join(self.working_dir, "temp_display")
-            if os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir)
 
     def get_project_json_path(self):
         if not self.working_dir:

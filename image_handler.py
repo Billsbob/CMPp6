@@ -65,6 +65,58 @@ class ImageDisplayHandler:
         self.visible_assets.clear()
         self.asset_colors.clear()
 
+    @staticmethod
+    def array_to_qimage(data):
+        """
+        Converts a NumPy array to a QImage.
+        Expects data in float 0-1 range or uint8 0-255.
+        """
+        if data is None:
+            return None
+
+        # Normalize data to 0-255 for display if needed
+        if data.max() <= 1.01 and data.min() >= -0.01:
+            display_data = (data * 255).astype(np.uint8)
+        else:
+            d_min, d_max = data.min(), data.max()
+            if d_max > d_min:
+                display_data = ((data - d_min) / (d_max - d_min) * 255).astype(np.uint8)
+            else:
+                display_data = np.zeros_like(data, dtype=np.uint8)
+
+        display_data = np.ascontiguousarray(display_data)
+        qimg = qimage2ndarray.array2qimage(display_data)
+        if qimg.isNull():
+            # Fallback for failed array conversion
+            qimg = QImage(display_data.shape[1], display_data.shape[0], QImage.Format_Grayscale8)
+            qimg.fill(0)
+        return qimg.copy()
+
+    @staticmethod
+    def apply_color_to_qimage(qimg, color_rgb):
+        """Applies a color tint to a grayscale QImage."""
+        if qimg.isNull():
+            return qimg
+
+        if qimg.format() != QImage.Format_RGB32 and qimg.format() != QImage.Format_ARGB32:
+            qimg = qimg.convertToFormat(QImage.Format_ARGB32)
+
+        # Convert to ndarray for faster processing
+        try:
+            arr = qimage2ndarray.rgb_view(qimg).astype(np.float32)
+        except (ValueError, TypeError):
+            # Fallback if qimage2ndarray fails
+            return qimg
+
+        # Multiply by color_rgb
+        # color_rgb is (R, G, B) in 0-1 range
+        for i in range(3):
+            arr[:, :, i] *= color_rgb[i]
+
+        # Clip and convert back to uint8
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+        return qimage2ndarray.array2qimage(arr).copy()
+
     def render_composite(self, asset_manager):
         num_images = len(self.visible_assets)
         if num_images == 0:
@@ -83,7 +135,7 @@ class ImageDisplayHandler:
             if not image_asset:
                 continue
             
-            data = image_asset.get_rendered_data(for_display=True, use_cache=True)
+            data = image_asset.get_rendered_data(for_display=True)
             if data is None:
                 continue
 

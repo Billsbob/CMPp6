@@ -4,7 +4,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import cv2
 
-def create_histograms(measurements, mask_name, output_dir, source_masks=None):
+def create_histograms(measurements, mask_name, output_dir, source_masks=None, show_kde=True):
     """
     Create individual histograms for each image's measurements.
     
@@ -13,6 +13,7 @@ def create_histograms(measurements, mask_name, output_dir, source_masks=None):
         mask_name (str): Name of the mask used.
         output_dir (str): Directory to save the histogram images.
         source_masks (list, optional): List of source masks if the mask is a merged one.
+        show_kde (bool): Whether to show KDE in the PNG.
         
     Returns:
         list of str: List of filenames of the generated histograms.
@@ -28,7 +29,7 @@ def create_histograms(measurements, mask_name, output_dir, source_masks=None):
             continue
             
         plt.figure(figsize=(10, 6))
-        sns.histplot(values, kde=True)
+        sns.histplot(values, kde=show_kde)
         title = f"Histogram of {image_name} under {mask_name}"
         if source_masks:
             title += f"\n(Sources: {', '.join(source_masks)})"
@@ -112,15 +113,16 @@ def create_overlaid_histogram(measurements, mask_name, output_dir, source_masks=
     
     return hist_filename
 
-def create_dynamic_overlaid_histogram(items_measurements, title="Combined Histograms", output_path=None, source_masks=None):
+def create_dynamic_overlaid_histogram(items_measurements, title="Combined Histograms", output_path=None, source_masks=None, show_kde=True):
     """
-    Create a histogram overlay from a list of (label, values) tuples.
+    Create a high-quality histogram overlay from a list of (label, values) tuples.
     
     Args:
         items_measurements (list of tuples): List of (label, values) to plot.
         title (str): Plot title.
         output_path (str, optional): If provided, save the plot to this path.
         source_masks (list, optional): List of source masks if applicable.
+        show_kde (bool): Whether to show KDE.
         
     Returns:
         np.ndarray: The plot as an RGB image array.
@@ -136,7 +138,7 @@ def create_dynamic_overlaid_histogram(items_measurements, title="Combined Histog
         if len(values) == 0:
             continue
             
-        sns.histplot(values, kde=True, label=label, color=palette[i], element="step")
+        sns.histplot(values, kde=show_kde, label=label, color=palette[i], element="step")
         
         counts, _ = np.histogram(values, bins='auto')
         if len(counts) > 0:
@@ -175,4 +177,59 @@ def create_dynamic_overlaid_histogram(items_measurements, title="Combined Histog
     
     plt.close()
 
+    return rgb
+
+def render_fast_overlay(items_counts, title="Combined Histograms (Fast Preview)", source_masks=None):
+    """
+    Render a fast overlay using pre-calculated binned data (counts).
+    
+    Args:
+        items_counts (list of tuples): List of (label, counts) to plot. 
+                                      Counts should be an array of size 256.
+        title (str): Plot title.
+        source_masks (list, optional): List of source masks if applicable.
+        
+    Returns:
+        np.ndarray: The plot as an RGB image array.
+    """
+    if not items_counts:
+        return None
+        
+    # Use standard Matplotlib (no Seaborn) for speed
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    x = np.arange(256)
+    
+    max_freq = 0
+    for label, counts in items_counts:
+        if len(counts) == 0:
+            continue
+        ax.step(x, counts, label=label, where='mid', alpha=0.7)
+        max_freq = max(max_freq, np.max(counts))
+        
+    if source_masks:
+        title += f"\n(Sources: {', '.join(source_masks)})"
+    ax.set_title(title)
+    ax.set_xlabel("Intensity")
+    ax.set_ylabel("Frequency")
+    ax.legend(title="Items")
+    
+    if max_freq > 0:
+        ax.set_ylim(0, max_freq * 1.1)
+        
+    # Convert plot to image array
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    canvas = FigureCanvasAgg(fig)
+    canvas.draw()
+    
+    try:
+        rgba = np.array(canvas.buffer_rgba())
+        rgb = rgba[:, :, :3]
+    except AttributeError:
+        # Fallback
+        rgb = np.frombuffer(canvas.tostring_rgb(), dtype='uint8')
+        w, h = canvas.get_width_height()
+        rgb = rgb.reshape((h, w, 3))
+    
+    plt.close(fig)
     return rgb

@@ -1,6 +1,7 @@
 import PyInstaller.__main__
 import os
 import sys
+import textwrap
 
 # Define the entry point of your application
 entry_point = 'main.py'
@@ -42,6 +43,12 @@ args = [
     '--hidden-import', 'pandas._libs.tslibs.timedeltas',
     '--hidden-import', 'skimage.filters.rank.core_cy_3d',
     '--hidden-import', 'qimage2ndarray',
+    '--hidden-import', 'sklearn.utils._heap',
+    '--hidden-import', 'sklearn.utils._sorting',
+    '--hidden-import', 'sklearn.utils._vector_sentinel',
+    '--collect-submodules', 'skimage',
+    '--collect-submodules', 'scipy.stats',
+    '--collect-submodules', 'sklearn',
 ]
 
 # Add data files to arguments
@@ -64,6 +71,10 @@ if __name__ == '__main__':
     if not os.path.exists('build'):
         os.makedirs('build')
 
+    print(f"Building {exe_name} with command line arguments first to generate initial analysis...")
+    # This part is optional but helps in some cases to see what PyInstaller finds
+    # PyInstaller.__main__.run(args) 
+
     # Hidden imports for the spec file
     hidden_imports = [
         'sklearn.utils._typedefs',
@@ -79,13 +90,16 @@ if __name__ == '__main__':
         'pandas._libs.tslibs.nattype',
         'pandas._libs.tslibs.timedeltas',
         'skimage.filters.rank.core_cy_3d',
-        'qimage2ndarray'
+        'qimage2ndarray',
+        'sklearn.utils._heap',
+        'sklearn.utils._sorting',
+        'sklearn.utils._vector_sentinel'
     ]
 
     # Excludes for the spec file
     excludes = ['cupy', 'cupyx', 'cupy_backends', 'cuda_pathfinder', 'fast_array_utils']
 
-    # Create the spec file content if it doesn't exist or we want to ensure it's correct
+    # Create the spec file content
     spec_content = f"""
 # -*- mode: python ; coding: utf-8 -*-
 import os
@@ -104,26 +118,32 @@ a = Analysis(
     hooksconfig={{}},
     runtime_hooks=[],
     excludes={excludes},
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=None,
     noarchive=False,
-    optimize=0,
+    module_collection_mode={{
+        'skimage': 'py',
+        'scipy.stats': 'py',
+        'sklearn': 'py',
+    }}
 )
+pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 
 # Filter out large CUDA DLLs from binaries
-excluded_dlls = {{
-    'cublas64_11.dll', 'cublas64_12.dll', 'cublas64_13.dll',
-    'cublasLt64_11.dll', 'cublasLt64_12.dll', 'cublasLt64_13.dll',
-    'cufft64_10.dll', 'cufft64_11.dll', 'cufft64_12.dll',
-    'curand64_10.dll',
-    'cusolver64_11.dll', 'cusolver64_12.dll',
-    'cusparse64_11.dll', 'cusparse64_12.dll',
-    'nvJitLink_120_0.dll', 'nvJitLink_130_0.dll',
-    'nvrtc64_120_0.dll', 'nvrtc64_130_0.dll',
-    'cudnn64_8.dll', 'cudnn64_9.dll'
-}}
+excluded_dlls = {
+        'cublas64_11.dll', 'cublas64_12.dll', 'cublas64_13.dll',
+        'cublasLt64_11.dll', 'cublasLt64_12.dll', 'cublasLt64_13.dll',
+        'cufft64_10.dll', 'cufft64_11.dll', 'cufft64_12.dll',
+        'curand64_10.dll',
+        'cusolver64_11.dll', 'cusolver64_12.dll',
+        'cusparse64_11.dll', 'cusparse64_12.dll',
+        'nvJitLink_120_0.dll', 'nvJitLink_130_0.dll',
+        'nvrtc64_120_0.dll', 'nvrtc64_130_0.dll',
+        'cudnn64_8.dll', 'cudnn64_9.dll'
+    }
 
 a.binaries = [x for x in a.binaries if os.path.basename(x[0]).lower() not in [d.lower() for d in excluded_dlls]]
-
-pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,

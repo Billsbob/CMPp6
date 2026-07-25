@@ -88,3 +88,70 @@ def get_mask_properties(mask):
         })
         
     return properties
+
+def merge_masks(masks):
+    """
+    Merges multiple binary masks into one using logical OR.
+    Resizes masks to match the first mask's shape if necessary.
+    
+    Args:
+        masks (list of np.ndarray): List of binary masks.
+        
+    Returns:
+        np.ndarray: Merged binary mask (uint8).
+    """
+    if not masks:
+        return None
+        
+    import cv2
+    merged_mask = None
+    
+    for mask in masks:
+        if mask is None:
+            continue
+            
+        if merged_mask is None:
+            merged_mask = (mask > 0)
+        else:
+            if mask.shape[:2] != merged_mask.shape[:2]:
+                mask_resized = cv2.resize(mask.astype(np.uint8), 
+                                         (merged_mask.shape[1], merged_mask.shape[0]), 
+                                         interpolation=cv2.INTER_NEAREST)
+                mask_bool = (mask_resized > 0)
+            else:
+                mask_bool = (mask > 0)
+            merged_mask = np.logical_or(merged_mask, mask_bool)
+            
+    if merged_mask is None:
+        return None
+        
+    return merged_mask.astype(np.uint8)
+
+def create_threshold_mask(stack, threshold, normalize=False):
+    """
+    Creates a threshold mask from an image stack.
+    
+    Args:
+        stack (np.ndarray): Image stack (N, H, W).
+        threshold (float): Threshold value.
+        normalize (bool): Whether to normalize the stack before thresholding.
+        
+    Returns:
+        np.ndarray: Binary mask (uint8).
+    """
+    if stack is None or len(stack) == 0:
+        return None
+        
+    processed_stack = stack.astype(np.float32)
+    
+    if normalize:
+        s_min, s_max = processed_stack.min(), processed_stack.max()
+        if s_max > s_min:
+            processed_stack = (processed_stack - s_min) / (s_max - s_min)
+        else:
+            processed_stack = np.zeros_like(processed_stack)
+            
+    max_projection = np.max(processed_stack, axis=0)
+    binary_mask = (max_projection > threshold).astype(np.uint8)
+    
+    return binary_mask

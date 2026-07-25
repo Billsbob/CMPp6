@@ -176,12 +176,17 @@ class MainWindow(QMainWindow):
         self.graph_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.graph_list.customContextMenuRequested.connect(self._show_graph_context_menu)
         self.graph_list.itemClicked.connect(self._graph_clicked)
+        self.graph_list.itemSelectionChanged.connect(self._show_graphs_window)
         
         graph_h_layout.addLayout(graph_btn_layout)
         graph_h_layout.addWidget(self.graph_list)
         
         dock_layout.addWidget(QLabel("Graphs:"))
         dock_layout.addWidget(graph_container)
+
+        self.kde_checkbox = QCheckBox("Show KDE / High Quality")
+        self.kde_checkbox.stateChanged.connect(self._show_graphs_window)
+        dock_layout.addWidget(self.kde_checkbox)
 
         self.opacity_slider = QSlider(Qt.Horizontal)
         self.opacity_slider.setRange(0, 100)
@@ -559,7 +564,8 @@ class MainWindow(QMainWindow):
                 mask_metadata = project_data.get("Masks", {}).get(mask_name, {})
                 source_masks = mask_metadata.get("source_masks")
 
-                hist_files = histogram_plots.create_histograms(measurements, mask_name, graph_dir, source_masks=source_masks)
+                # Recommended behavior: Create PNG, JSON (raw values), and CSV (counts)
+                hist_files = histogram_plots.create_histograms(measurements, mask_name, graph_dir, source_masks=source_masks, show_kde=True)
                 json_measurements_path = export_plot_utils.save_measurements_json(measurements, mask_name, graph_dir)
                 csv_measurements_path = export_plot_utils.save_group_csv(measurements, mask_name, graph_dir)
 
@@ -739,13 +745,16 @@ class MainWindow(QMainWindow):
         
         # Clear existing graphs in the window
         for i in reversed(range(self.graphs_layout.count())): 
-            self.graphs_layout.itemAt(i).widget().setParent(None)
+            widget = self.graphs_layout.itemAt(i).widget()
+            if widget:
+                widget.setParent(None)
 
         selected_graphs = self.graph_list.selectedItems()
         if not selected_graphs:
             return
         
         graph_dir = os.path.join(self.working_dir, "Graphs")
+        show_kde = self.kde_checkbox.isChecked()
         
         if len(selected_graphs) == 1:
             # Single graph - show the pre-rendered image
@@ -753,31 +762,13 @@ class MainWindow(QMainWindow):
             if os.path.exists(graph_path):
                 label = QLabel()
                 pixmap = QPixmap(graph_path)
-                
-                # Rescale jointplots as they can be larger
-                if selected_graphs[0].text().startswith("JointPlot_"):
-                    # Scale to a reasonable size if needed, but for now just show
-                    pass
-                
                 label.setPixmap(pixmap)
                 self.graphs_layout.addWidget(label)
         else:
             # Multi-selection - create a combined histogram
-            items_measurements = []
+            # If high quality is requested, we use raw values from JSON
+            # Otherwise we use counts from CSV
             
-            # Group selected graphs by their potential mask names to minimize JSON loading
-            # Mask names are derived from the filenames of the JSONs in the Graphs directory
-            mask_to_measurements = {}
-            if os.path.exists(graph_dir):
-                for f in os.listdir(graph_dir):
-                    if f.startswith("Histograms_") and f.endswith(".json"):
-                        mask_name_from_json = f[len("Histograms_"):-len(".json")]
-                        try:
-                            with open(os.path.join(graph_dir, f), 'r') as jf:
-                                mask_to_measurements[mask_name_from_json] = json.load(jf)
-                        except:
-                            pass
-
             # Find project JSON path
             image_list = self.asset_manager.get_image_list()
             project_name = "project_"
@@ -798,55 +789,80 @@ class MainWindow(QMainWindow):
                     pass
 
             source_masks = None
-            for item in selected_graphs:
-                name = item.text()
-                if name.startswith("JointPlot_"):
-                    continue
-                
-                found = False
-                for mask_name, measurements in mask_to_measurements.items():
-                    # Check if this graph filename belongs to this mask
-                    # New convention: <Mask Name>_<Well Position>_<Probe>.png
-                    # Old convention: Hist_<Image Name>_<Mask Name>.png
-                    # Overlaid: <Mask Name>_Overlay.png or Hist_Overlay_<Mask Name>.png
-                    
-                    if mask_name in name:
-                        # Get source masks for the title
-                        source_masks = project_data.get("Masks", {}).get(mask_name, {}).get("source_masks")
+            items_to_render = [] # Either (label, values) or (label, counts)
 
-                        for img_name, values in measurements.items():
-                            # Create safe version of image name used in filenames
-                            safe_img = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in img_name])
-                            
-                            # For individual histograms
-                            if safe_img in name:
-                                items_measurements.append((f"{img_name} ({mask_name})", values))
-                                found = True
-                                break
-                            
-                            # For new naming convention <Mask Name>_<Well Position>_<Probe>.png
-                            # we need to check if Well Position and Probe match
-                            parts = safe_img.split('_')
-                            if len(parts) >= 6:
-                                well_pos = parts[4]
-                                probe = os.path.splitext(parts[5])[0]
-                                if f"_{well_pos}_{probe}" in name:
-                                    items_measurements.append((f"{img_name} ({mask_name})", values))
+            if show_kde:
+                # High quality - Load JSON raw values
+                mask_to_measurements = {}
+                if os.path.exists(graph_dir):
+                    for f in os.listdir(graph_dir):
+                        if f.startswith("Histograms_") and f.endswith(".json"):
+                            mask_name_from_json = f[len("Histograms_"):-len(".json")]
+                            try:
+                                with open(os.path.join(graph_dir, f), 'r') as jf:
+                                    mask_to_measurements[mask_name_from_json] = json.load(jf)
+                            except:
+                                pass
+
+                for item in selected_graphs:
+                    name = item.text()
+                    if name.startswith("JointPlot_"): continue
+                    
+                    found = False
+                    for mask_name, measurements in mask_to_measurements.items():
+                        if mask_name in name:
+                            source_masks = project_data.get("Masks", {}).get(mask_name, {}).get("source_masks")
+                            for img_name, values in measurements.items():
+                                from export_plot_utils import get_safe_histogram_name
+                                column_header = get_safe_histogram_name(img_name, mask_name)
+                                if column_header in name:
+                                    items_to_render.append((f"{img_name} ({mask_name})", values))
                                     found = True
                                     break
-                        
+                            if found: break
+                
+                if items_to_render:
+                    combined_rgb = histogram_plots.create_dynamic_overlaid_histogram(items_to_render, source_masks=source_masks, show_kde=True)
+            else:
+                # Fast rendering - Load CSV counts
+                mask_to_counts = {}
+                if os.path.exists(graph_dir):
+                    for f in os.listdir(graph_dir):
+                        if f.startswith("Histograms_") and f.endswith(".csv"):
+                            mask_name_from_csv = f[len("Histograms_"):-len(".csv")]
+                            try:
+                                df = pd.read_csv(os.path.join(graph_dir, f))
+                                mask_to_counts[mask_name_from_csv] = df
+                            except:
+                                pass
+                
+                for item in selected_graphs:
+                    name = item.text()
+                    if name.startswith("JointPlot_"): continue
+                    
+                    found = False
+                    # Remove .png extension for matching with CSV headers
+                    name_no_ext = os.path.splitext(name)[0]
+                    
+                    for mask_name, df in mask_to_counts.items():
+                        if mask_name in name:
+                            source_masks = project_data.get("Masks", {}).get(mask_name, {}).get("source_masks")
+                            if name_no_ext in df.columns:
+                                counts = df[name_no_ext].values
+                                items_to_render.append((name_no_ext, counts))
+                                found = True
                         if found: break
-            
-            if items_measurements:
-                combined_rgb = histogram_plots.create_dynamic_overlaid_histogram(items_measurements, source_masks=source_masks)
-                if combined_rgb is not None:
-                    # Ensure the array is C-contiguous for QImage
-                    combined_rgb = np.ascontiguousarray(combined_rgb)
-                    h, w, _ = combined_rgb.shape
-                    qimg = QImage(combined_rgb.data, w, h, combined_rgb.strides[0], QImage.Format_RGB888)
-                    label = QLabel()
-                    label.setPixmap(QPixmap.fromImage(qimg))
-                    self.graphs_layout.addWidget(label)
+                
+                if items_to_render:
+                    combined_rgb = histogram_plots.render_fast_overlay(items_to_render, source_masks=source_masks)
+
+            if items_to_render and combined_rgb is not None:
+                combined_rgb = np.ascontiguousarray(combined_rgb)
+                h, w, _ = combined_rgb.shape
+                qimg = QImage(combined_rgb.data, w, h, combined_rgb.strides[0], QImage.Format_RGB888)
+                label = QLabel()
+                label.setPixmap(QPixmap.fromImage(qimg))
+                self.graphs_layout.addWidget(label)
 
     def _save_selected_graphs(self):
         if not self.working_dir: return
@@ -884,7 +900,7 @@ class MainWindow(QMainWindow):
             shutil.copy(os.path.join(graph_dir, selected[0].text()), path)
             QMessageBox.information(self, "Save PNG", f"Graph saved to {path}")
         else:
-            # Create and save combined
+            # Create and save combined - ALWAYS HIGH QUALITY
             items_measurements = []
             
             mask_to_measurements = {}
@@ -923,11 +939,11 @@ class MainWindow(QMainWindow):
                                 break
                         if found: break
                 
-                if items_measurements:
-                    # Remove duplicates from source_masks_list
-                    unique_sources = sorted(list(set(source_masks_list)))
-                    histogram_plots.create_dynamic_overlaid_histogram(items_measurements, output_path=path, source_masks=unique_sources if unique_sources else None)
-                    QMessageBox.information(self, "Save PNG", f"Combined histogram saved to {path}")
+            if items_measurements:
+                # Remove duplicates from source_masks_list
+                unique_sources = sorted(list(set(source_masks_list)))
+                histogram_plots.create_dynamic_overlaid_histogram(items_measurements, output_path=path, source_masks=unique_sources if unique_sources else None, show_kde=True)
+                QMessageBox.information(self, "Save PNG", f"Combined high-quality histogram saved to {path}")
 
     def _export_selected_graphs(self):
         if not self.working_dir: return
@@ -1384,17 +1400,7 @@ class MainWindow(QMainWindow):
         dialog = ThresholdParameterDialog(self)
         
         def update_preview(params):
-            temp_stack = stack
-            if params["normalize"]:
-                s_min, s_max = temp_stack.min(), temp_stack.max()
-                if s_max > s_min:
-                    temp_stack = (temp_stack - s_min) / (s_max - s_min)
-                else:
-                    temp_stack = np.zeros_like(temp_stack)
-            
-            max_proj = np.max(temp_stack, axis=0)
-            self.preview_mask = (max_proj > params["threshold"]).astype(np.uint8)
-            
+            self.preview_mask = mask_refinement.create_threshold_mask(stack, params["threshold"], params["normalize"])
             self.cached_composite = None
             self._refresh_viewer()
 
@@ -1408,16 +1414,7 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("Creating threshold mask...")
                 QApplication.setOverrideCursor(Qt.WaitCursor)
                 
-                # Use the preview mask if it was just generated, or regenerate to be sure
-                if params["normalize"]:
-                    s_min, s_max = stack.min(), stack.max()
-                    if s_max > s_min:
-                        stack = (stack - s_min) / (s_max - s_min)
-                    else:
-                        stack = np.zeros_like(stack)
-                
-                max_projection = np.max(stack, axis=0)
-                binary_mask = (max_projection > params["threshold"]).astype(np.uint8)
+                binary_mask = mask_refinement.create_threshold_mask(stack, params["threshold"], params["normalize"])
 
                 mask_dir = os.path.join(self.working_dir, "Cluster Masks")
                 os.makedirs(mask_dir, exist_ok=True)
@@ -1603,6 +1600,36 @@ class MainWindow(QMainWindow):
                 return
                 
             try:
+                # Handle JSON renaming first
+                asset = None
+                if subfolder == "Cluster Masks":
+                    asset = self.asset_manager.get_mask_by_name(old_name)
+                elif subfolder == "Images":
+                    asset = self.asset_manager.get_image_by_name(old_name)
+                
+                if asset:
+                    old_json = asset.get_json_path()
+                    if os.path.exists(old_json):
+                        # Temporarily change attributes to get new json path
+                        orig_path = asset.path
+                        orig_base = asset.base_name
+                        orig_name = asset.name
+                        
+                        asset.path = new_path
+                        asset.base_name = new_filename
+                        asset.name = new_filename
+                        
+                        new_json = asset.get_json_path()
+                        
+                        # Revert for now, will set permanently after successful rename
+                        asset.path = orig_path
+                        asset.base_name = orig_base
+                        asset.name = orig_name
+                        
+                        if os.path.exists(new_json):
+                             os.remove(new_json) # Overwrite if exists
+                        os.rename(old_json, new_json)
+
                 os.rename(old_path, new_path)
                 
         # Update tracking if necessary (e.g., visible masks)
@@ -1614,24 +1641,30 @@ class MainWindow(QMainWindow):
                     self.image_handler.rename_asset(old_name, new_filename)
                     
                     # Update the asset's internal knowledge of its name/path if it's already loaded
-                    asset = self.asset_manager.get_mask_by_name(old_name)
                     if asset:
                         asset.path = new_path
+                        asset.base_name = new_filename
+                        asset.name = new_filename
                         # Rename in asset_manager maps
                         del self.asset_manager.masks[old_name]
                         self.asset_manager.masks[new_filename] = asset
                     
                     self._update_mask_list()
+                    self.cached_composite = None
+                    self._refresh_viewer()
                 elif subfolder == "Graphs":
                     self._update_graph_list()
                 elif subfolder == "Images":
                     self.image_handler.rename_asset(old_name, new_filename)
-                    asset = self.asset_manager.get_image_by_name(old_name)
                     if asset:
                         asset.path = new_path
+                        asset.base_name = new_filename
+                        asset.name = new_filename
                         del self.asset_manager.images[old_name]
                         self.asset_manager.images[new_filename] = asset
                     self._update_asset_list()
+                    self.cached_composite = None
+                    self._refresh_viewer()
                     
             except Exception as e:
                 QMessageBox.critical(self, "Rename Error", f"Failed to rename file: {str(e)}")
@@ -1677,12 +1710,10 @@ class MainWindow(QMainWindow):
         for name, asset in self.asset_manager.images.items():
             asset.pipeline.config["invert"] = False
             asset.save_project()
-            asset.update_display_png()
         
         for name, asset in self.asset_manager.masks.items():
             asset.pipeline.config["invert"] = False
             asset.save_project()
-            asset.update_display_png()
         
         self.cached_composite = None
         self._update_asset_list()
@@ -1703,13 +1734,11 @@ class MainWindow(QMainWindow):
             transforms = asset.pipeline.config.get("transforms", [])
             asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "rotate"]
             asset.save_project()
-            asset.update_display_png()
         
         for name, asset in self.asset_manager.masks.items():
             transforms = asset.pipeline.config.get("transforms", [])
             asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "rotate"]
             asset.save_project()
-            asset.update_display_png()
         
         self.cached_composite = None
         self._update_asset_list()
@@ -1730,13 +1759,11 @@ class MainWindow(QMainWindow):
             transforms = asset.pipeline.config.get("transforms", [])
             asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "crop"]
             asset.save_project()
-            asset.update_display_png()
         
         for name, asset in self.asset_manager.masks.items():
             transforms = asset.pipeline.config.get("transforms", [])
             asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "crop"]
             asset.save_project()
-            asset.update_display_png()
         
         self.cached_composite = None
         self._update_asset_list()
@@ -1751,7 +1778,6 @@ class MainWindow(QMainWindow):
             if asset:
                 asset.pipeline.config["color"] = color_name
                 asset.save_project()
-                asset.update_display_png()
             self.cached_composite = None
             self._update_mask_list()
             self._refresh_viewer()
@@ -1761,7 +1787,6 @@ class MainWindow(QMainWindow):
         if asset:
             asset.pipeline.config["color"] = color_name
             asset.save_project()
-            asset.update_display_png()
             self.cached_composite = None
             self._update_asset_list()
             self._refresh_viewer()
@@ -1769,7 +1794,6 @@ class MainWindow(QMainWindow):
     def _toggle_transform(self, asset, key):
         asset.pipeline.config[key] = not asset.pipeline.config.get(key, False)
         asset.save_project()
-        asset.update_display_png()
         self.cached_composite = None
         self._update_asset_list()
         self._refresh_viewer()
@@ -1787,12 +1811,10 @@ class MainWindow(QMainWindow):
         for name, asset in self.asset_manager.images.items():
             asset.pipeline.config["invert"] = not asset.pipeline.config.get("invert", False)
             asset.save_project()
-            asset.update_display_png()
         
         for name, asset in self.asset_manager.masks.items():
             asset.pipeline.config["invert"] = not asset.pipeline.config.get("invert", False)
             asset.save_project()
-            asset.update_display_png()
             
         self.cached_composite = None
         self._update_asset_list()
@@ -1823,7 +1845,6 @@ class MainWindow(QMainWindow):
                     asset.pipeline.config["filter_params"] = {}
                 asset.pipeline.config["filter_params"][filter_name] = params
                 asset.save_project()
-                asset.update_display_png()
             self.cached_composite = None
             self._update_asset_list()
             self._refresh_viewer()
@@ -1846,12 +1867,10 @@ class MainWindow(QMainWindow):
         for name, asset in self.asset_manager.images.items():
             asset.pipeline.config.setdefault("transforms", []).append({"type": "crop", "params": rect})
             asset.save_project()
-            asset.update_display_png()
         
         for name, asset in self.asset_manager.masks.items():
             asset.pipeline.config.setdefault("transforms", []).append({"type": "crop", "params": rect})
             asset.save_project()
-            asset.update_display_png()
         
         self.cached_composite = None
         self._update_asset_list()
@@ -1927,7 +1946,6 @@ class MainWindow(QMainWindow):
                 "fill_color": fill_color.lower()
             })
             asset.save_project()
-            asset.update_display_png()
 
         for name, asset in self.asset_manager.masks.items():
             asset.pipeline.config.setdefault("transforms", []).append({
@@ -1936,7 +1954,6 @@ class MainWindow(QMainWindow):
                 "fill_color": fill_color.lower()
             })
             asset.save_project()
-            asset.update_display_png()
 
         self.cached_composite = None
         self.viewer_view.clear_rotation_line()
@@ -2082,7 +2099,7 @@ class MainWindow(QMainWindow):
                 return
 
         try:
-            merged_mask = None
+            masks_to_merge = []
             source_masks = []
             for item in selected_items:
                 mask_name = item.text()
@@ -2090,19 +2107,14 @@ class MainWindow(QMainWindow):
                 mask_asset = self.asset_manager.get_mask_by_name(mask_name)
                 if mask_asset:
                     mask = mask_asset.get_rendered_data(data_only=True)
-                else:
-                    continue
-                
-                if merged_mask is None:
-                    merged_mask = mask.astype(bool)
-                else:
-                    if mask.shape[:2] != merged_mask.shape[:2]:
-                        mask = cv2.resize(mask.astype(np.uint8), 
-                                          (merged_mask.shape[1], merged_mask.shape[0]), 
-                                          interpolation=cv2.INTER_NEAREST).astype(bool)
-                    merged_mask = np.logical_or(merged_mask, mask.astype(bool))
+                    if mask is not None:
+                        masks_to_merge.append(mask)
 
-            cv2.imwrite(output_path, merged_mask.astype(np.uint8))
+            if not masks_to_merge:
+                return
+
+            merged_mask = mask_refinement.merge_masks(masks_to_merge)
+            cv2.imwrite(output_path, merged_mask * 255 if merged_mask.max() == 1 else merged_mask)
 
             # Update Project JSON
             try:
@@ -2193,7 +2205,7 @@ class MainWindow(QMainWindow):
                     else:
                         mask_asset = self.asset_manager.get_mask_by_name(list(self.visible_masks)[0])
                         if mask_asset:
-                            m = mask_asset.get_rendered_data(for_display=True, use_cache=True)
+                            m = mask_asset.get_rendered_data(for_display=True)
                             if m is not None:
                                 h, w = m.shape
                             else:
@@ -2209,7 +2221,7 @@ class MainWindow(QMainWindow):
                     for mask_name in sorted(self.visible_masks):
                         mask_asset = self.asset_manager.get_mask_by_name(mask_name)
                         if mask_asset:
-                            mask = mask_asset.get_rendered_data(for_display=True, use_cache=True)
+                            mask = mask_asset.get_rendered_data(for_display=True)
                             if mask is None:
                                 continue
                                 
