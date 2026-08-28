@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDialog
 )
 from PySide6.QtGui import QAction, QPixmap, QPainter, QPalette, QPen, QColor, QBrush, QImage
-from PySide6.QtCore import Qt, QSize, QPoint, QPointF, QRectF, Signal, QObject, QThread
+from PySide6.QtCore import Qt, QSize, QPoint, QPointF, QRectF, Signal, QObject, QThread, QSettings
 import os
 import numpy as np
 import pandas as pd
@@ -23,6 +23,7 @@ import histogram_plots
 import kde_plots
 import export_plot_utils
 import mask_refinement
+from reconciliation import reconcile_project_with_disk
 from workers import ClusteringWorker
 from widgets import ZoomableView
 from dialogs import (
@@ -50,6 +51,15 @@ class MainWindow(QMainWindow):
         self._create_menu_bar()
         self._create_status_bar()
         self._setup_ui()
+
+        # Load last working directory at startup
+        QSettings.setDefaultFormat(QSettings.IniFormat)
+        settings = QSettings("CMP", "Viewer")
+        last_dir = settings.value("last_working_dir")
+        if last_dir and os.path.exists(last_dir):
+            # Use a single-shot timer to allow the UI to show before the dialog potentially pops up
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: self._load_working_directory(last_dir))
 
     def _setup_ui(self):
         self.mdi_area = QMdiArea()
@@ -314,6 +324,10 @@ class MainWindow(QMainWindow):
         create_jointplot_action.triggered.connect(self._create_jointplot)
         analyze_menu.addAction(create_jointplot_action)
 
+        phenotype_masks_action = QAction("Phenotype Masks", self)
+        phenotype_masks_action.triggered.connect(self._phenotype_masks)
+        analyze_menu.addAction(phenotype_masks_action)
+
         mask_menu = menu_bar.addMenu("Mask")
         refine_mask_action = QAction("Refine Mask", self)
         refine_mask_action.triggered.connect(self._refine_mask)
@@ -347,27 +361,37 @@ class MainWindow(QMainWindow):
     def _home_triggered(self):
         directory = QFileDialog.getExistingDirectory(self, "Select Working Directory")
         if directory:
-            self.working_dir = directory
-            self.asset_manager.set_working_dir(directory)
-            
-            # Check for naming convention violations
-            invalid_files = self.asset_manager.validate_filenames()
-            if invalid_files:
-                msg = "The following files do not match the naming convention:\n\n"
-                msg += "\n".join(invalid_files[:20])
-                if len(invalid_files) > 20:
-                    msg += f"\n... and {len(invalid_files) - 20} more."
-                msg += "\n\nRequired convention:\n<Sample>_<Slide ##>_<Owner Initials>_<ObjectiveMag>_<Well Position>_<Probe>\n"
-                msg += "Example: 123_01_JS_20x_5_DAPI.tif"
-                QMessageBox.warning(self, "Naming Convention Warning", msg)
+            self._load_working_directory(directory)
 
-            self.image_handler.clear()
-            self.visible_masks.clear()
-            self._update_asset_list()
-            self._update_mask_list()
-            self._update_graph_list()
-            self._refresh_viewer()
-            self.bg_label.lower()
+    def _load_working_directory(self, directory):
+        self.working_dir = directory
+        self.asset_manager.set_working_dir(directory)
+        
+        # Save to settings
+        settings = QSettings("CMP", "Viewer")
+        settings.setValue("last_working_dir", directory)
+        
+        # Reconcile project JSON with items on disk
+        reconcile_project_with_disk(self.asset_manager, self)
+        
+        # Check for naming convention violations
+        invalid_files = self.asset_manager.validate_filenames()
+        if invalid_files:
+            msg = "The following files do not match the naming convention:\n\n"
+            msg += "\n".join(invalid_files[:20])
+            if len(invalid_files) > 20:
+                msg += f"\n... and {len(invalid_files) - 20} more."
+            msg += "\n\nRequired convention:\n<Sample>_<Slide ##>_<Owner Initials>_<ObjectiveMag>_<Well Position>_<Probe>\n"
+            msg += "Example: 123_01_JS_20x_5_DAPI.tif"
+            QMessageBox.warning(self, "Naming Convention Warning", msg)
+
+        self.image_handler.clear()
+        self.visible_masks.clear()
+        self._update_asset_list()
+        self._update_mask_list()
+        self._update_graph_list()
+        self._refresh_viewer()
+        self.bg_label.lower()
 
     def _import_image(self):
         if not self.working_dir:
@@ -757,6 +781,88 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Joint KDE Plot Error", f"An error occurred: {str(e)}")
             finally:
                 QApplication.restoreOverrideCursor()
+
+    def _phenotype_masks(self):
+        if not hasattr(self, 'asset_manager') or not self.asset_manager.working_dir:
+            QMessageBox.warning(self, "Phenotype Masks", "Please select a working directory first.")
+            return
+            
+        selected_items = self.mask_list.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "No Selection", "Please select one or more masks to phenotype.")
+            return
+            
+        selected_masks = [item.text() for item in selected_items]
+        
+        # Check if images are also selected
+        selected_images = self.image_list.selectedItems()
+        image_names = [item.text() for item in selected_images]
+        
+        normalization_type = "None"
+        if image_names:
+            options = ["None", "Local (per image)", "Global (entire stack)"]
+            item, ok = QInputDialog.getItem(self, "Normalization", 
+                                            "Select normalization type for histograms:", 
+                                            options, 0, False)
+            if not ok:
+                return
+            normalization_type = item
+
+        # Prompt user to select tissue area mask
+        all_masks = self.asset_manager.get_mask_list()
+        if not all_masks:
+            QMessageBox.warning(self, "Phenotype Masks", "No masks found in the project to use as tissue area.")
+            return
+
+        tissue_mask, ok = QInputDialog.getItem(self, "Select Tissue Area Mask", 
+                                              "Select the mask that represents the tissue area:", 
+                                              all_masks, 0, False)
+        if not ok:
+            return
+
+        tissue_type, ok = QInputDialog.getItem(self, "Select Tissue Type", 
+                                              "Select the tissue type:", 
+                                              ["Retina", "Organoid"], 0, False)
+        if not ok:
+            return
+
+        output_dir = os.path.join(self.asset_manager.working_dir, "Phenotypes")
+        
+        try:
+            self.statusBar().showMessage("Phenotyping masks...")
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            
+            import mask_phenotyping
+            
+            # Determine project name for filename
+            image_list = self.asset_manager.get_image_list()
+            project_name = None
+            if image_list:
+                parts = image_list[0].split('_')
+                if len(parts) >= 2:
+                    project_name = f"{parts[0]}_{parts[1]}"
+            
+            csv_paths = mask_phenotyping.phenotype_masks(
+                self.asset_manager, selected_masks, output_dir, tissue_mask, tissue_type,
+                image_names=image_names, normalization_type=normalization_type,
+                project_name=project_name
+            )
+            
+            if csv_paths:
+                # Update project JSON
+                for path in csv_paths:
+                    self.asset_manager.add_phenotype_reference(path)
+                    
+                self.statusBar().showMessage(f"Phenotyping complete. Data saved to {output_dir}", 5000)
+                paths_str = "\n".join(csv_paths)
+                QMessageBox.information(self, "Success", f"Phenotyping complete.\n\nResults saved to:\n{paths_str}")
+            else:
+                QMessageBox.warning(self, "Error", "Phenotyping failed or no objects found in the selected masks.")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Phenotyping Error", f"An error occurred during phenotyping:\n{str(e)}")
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def _show_graphs_window(self):
         if self.graphs_window is None or not self.graphs_window.isVisible():

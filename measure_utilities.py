@@ -1,5 +1,85 @@
 import os
 import numpy as np
+from scipy.signal import find_peaks
+from scipy import stats
+
+def calculate_histogram_features(values, bins=256):
+    """
+    Calculate histogram-based features: mode, peak intensity, peak prominence,
+    number of peaks, and secondary peak location.
+    
+    Args:
+        values (list or np.ndarray): Pixel intensity values.
+        bins (int): Number of bins for histogram calculation.
+        
+    Returns:
+        dict: Dictionary containing the calculated features.
+    """
+    if not values or len(values) == 0:
+        return {
+            'mode': 0,
+            'peak intensity': 0,
+            'peak prominence': 0,
+            'number of peaks': 0,
+            'secondary peak location': 0
+        }
+    
+    v = np.array(values)
+    
+    # Exact mode for discrete values, but bin-based mode is safer for normalized/float data
+    if np.issubdtype(v.dtype, np.integer):
+        m = stats.mode(v, keepdims=True)
+        mode_val = float(m.mode[0])
+    else:
+        # For float data, use the peak of the histogram as mode
+        counts, bin_edges = np.histogram(v, bins=bins)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        mode_val = float(bin_centers[np.argmax(counts)])
+        
+    # Peak detection using histogram
+    counts, bin_edges = np.histogram(v, bins=bins)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    
+    # Normalize counts for prominence thresholding
+    max_count = np.max(counts)
+    if max_count == 0:
+        return {
+            'mode': mode_val,
+            'peak intensity': 0,
+            'peak prominence': 0,
+            'number of peaks': 0,
+            'secondary peak location': 0
+        }
+        
+    peaks, properties = find_peaks(counts, prominence=max_count * 0.05)
+    
+    num_peaks = len(peaks)
+    peak_intensity = 0.0
+    peak_prominence = 0.0
+    secondary_peak_location = 0.0
+    
+    if num_peaks > 0:
+        # Find indices of peaks sorted by their height (counts)
+        sorted_peak_indices = peaks[np.argsort(counts[peaks])[::-1]]
+        
+        main_peak_idx = sorted_peak_indices[0]
+        peak_intensity = float(bin_centers[main_peak_idx])
+        
+        # find index in 'peaks' array to get prominence from properties
+        main_peak_in_peaks_idx = np.where(peaks == main_peak_idx)[0][0]
+        peak_prominence = float(properties['prominences'][main_peak_in_peaks_idx])
+        
+        if num_peaks > 1:
+            secondary_peak_idx = sorted_peak_indices[1]
+            secondary_peak_location = float(bin_centers[secondary_peak_idx])
+            
+    return {
+        'mode': mode_val,
+        'peak intensity': peak_intensity,
+        'peak prominence': peak_prominence,
+        'number of peaks': num_peaks,
+        'secondary peak location': secondary_peak_location
+    }
 
 def calculate_mask_measurements(asset_manager, image_names, mask_name, normalize=False, normalize_stack=False):
     """

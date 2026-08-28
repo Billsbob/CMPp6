@@ -369,7 +369,9 @@ class AssetManager:
         deleted_assets = project_data.get("Deleted Assets", [])
 
         # Update Image IDs and Paths
-        project_data["Image IDs"] = image_list
+        existing_ids = project_data.get("Image IDs", [])
+        combined_ids = sorted(list(set(existing_ids) | set(image_list)))
+        project_data["Image IDs"] = combined_ids
         if "Image Paths" not in project_data:
             project_data["Image Paths"] = {}
         if "Image JSON Paths" not in project_data:
@@ -385,6 +387,32 @@ class AssetManager:
             project_data["Masks"] = {}
 
         project_data["Deleted Assets"] = deleted_assets
+
+        with open(project_json_path, 'w') as f:
+            json.dump(project_data, f, indent=4)
+
+    def add_phenotype_reference(self, csv_path):
+        project_json_path = self.get_project_json_path()
+        if not project_json_path:
+            return
+
+        project_data = {}
+        if os.path.exists(project_json_path):
+            try:
+                with open(project_json_path, 'r') as f:
+                    project_data = json.load(f)
+            except:
+                pass
+
+        if "Mask Phenotypes" not in project_data:
+            project_data["Mask Phenotypes"] = []
+
+        import datetime
+        entry = {
+            "csv_path": os.path.abspath(csv_path),
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        project_data["Mask Phenotypes"].append(entry)
 
         with open(project_json_path, 'w') as f:
             json.dump(project_data, f, indent=4)
