@@ -530,6 +530,17 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Graphing", "No images selected or visible.")
             return
 
+        # Ask for normalization
+        options = ["None", "Local (per image)", "Global (entire stack)"]
+        item, ok = QInputDialog.getItem(self, "Normalization", 
+                                        "Select normalization type (ISODATA style):", 
+                                        options, 0, False)
+        if not ok:
+            return
+
+        normalize = (item == "Local (per image)")
+        normalize_stack = (item == "Global (entire stack)")
+
         try:
             QApplication.setOverrideCursor(Qt.WaitCursor)
             
@@ -548,7 +559,10 @@ class MainWindow(QMainWindow):
             for i, mask_name in enumerate(mask_names):
                 self.statusBar().showMessage(f"Processing mask {i+1}/{len(mask_names)}: {mask_name}...")
                 
-                measurements = measure_utilities.calculate_mask_measurements(self.asset_manager, image_names, mask_name)
+                measurements = measure_utilities.calculate_mask_measurements(
+                    self.asset_manager, image_names, mask_name, 
+                    normalize=normalize, normalize_stack=normalize_stack
+                )
                 if not measurements:
                     continue
 
@@ -565,7 +579,11 @@ class MainWindow(QMainWindow):
                 source_masks = mask_metadata.get("source_masks")
 
                 # Recommended behavior: Create PNG, JSON (raw values), and CSV (counts)
-                hist_files = histogram_plots.create_histograms(measurements, mask_name, graph_dir, source_masks=source_masks, show_kde=True)
+                hist_files = histogram_plots.create_histograms(
+                    measurements, mask_name, graph_dir, 
+                    source_masks=source_masks, show_kde=True,
+                    normalization=item
+                )
                 json_measurements_path = export_plot_utils.save_measurements_json(measurements, mask_name, graph_dir)
                 csv_measurements_path = export_plot_utils.save_group_csv(measurements, mask_name, graph_dir)
 
@@ -627,6 +645,7 @@ class MainWindow(QMainWindow):
                         "probe": probe_name,
                         "linked_mask": mask_name,
                         "cluster_method": cluster_method,
+                        "normalization": item, # Store the normalization type
                         "histograms_json": os.path.abspath(json_measurements_path),
                         "histograms_csv": os.path.abspath(csv_measurements_path),
                         **stats
@@ -669,6 +688,17 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.Accepted:
             selections, user_filename = dialog.get_selections()
             
+            # Ask for normalization
+            options = ["None", "Local (per image)", "Global (entire stack)"]
+            item, ok = QInputDialog.getItem(self, "Normalization", 
+                                            "Select normalization type (ISODATA style):", 
+                                            options, 0, False)
+            if not ok:
+                return
+
+            normalize = (item == "Local (per image)")
+            normalize_stack = (item == "Global (entire stack)")
+
             try:
                 self.statusBar().showMessage("Generating Joint KDE Plot...")
                 QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -681,7 +711,10 @@ class MainWindow(QMainWindow):
                     mask_path = os.path.join(mask_dir, mask_name)
 
                     # Use the same function as histograms to get the data
-                    measurements = measure_utilities.calculate_mask_measurements(self.asset_manager, [image1_name, image2_name], mask_path)
+                    measurements = measure_utilities.calculate_mask_measurements(
+                        self.asset_manager, [image1_name, image2_name], mask_path,
+                        normalize=normalize, normalize_stack=normalize_stack
+                    )
                     if not measurements or len(measurements) < 2:
                         continue
                     
@@ -706,7 +739,7 @@ class MainWindow(QMainWindow):
                     return
 
                 graph_dir = os.path.join(self.working_dir, "Graphs")
-                filename = kde_plots.create_joint_kde_plot(all_measurements, graph_dir, user_filename=user_filename)
+                filename = kde_plots.create_joint_kde_plot(all_measurements, graph_dir, user_filename=user_filename, normalization=item)
 
                 if filename:
                     self.statusBar().showMessage("Joint KDE Plot completed.", 3000)
@@ -1006,7 +1039,12 @@ class MainWindow(QMainWindow):
                 histograms = []
                 for _, values in items_measurements:
                     if len(values) > 0:
-                        counts, _ = np.histogram(values, bins=range(257))
+                        v = np.array(values)
+                        if v.max() <= 1.0001 and v.min() >= -0.0001:
+                            # If values are normalized (0-1), scale to 0-255 for the fixed-bin CSV export
+                            counts, _ = np.histogram(v * 255.0, bins=range(257))
+                        else:
+                            counts, _ = np.histogram(v, bins=range(257))
                         histograms.append(counts)
                     else:
                         histograms.append([0] * 256)
@@ -1536,6 +1574,8 @@ class MainWindow(QMainWindow):
 
     def _opacity_changed(self, value):
         self.mask_opacity = value / 100.0
+        # Invalidate overlay cache when opacity changes
+        self.image_handler._cached_mask_overlay = None 
         self.cached_composite = None
         self._refresh_viewer()
 
@@ -1778,6 +1818,8 @@ class MainWindow(QMainWindow):
             if asset:
                 asset.pipeline.config["color"] = color_name
                 asset.save_project()
+            # Invalidate mask overlay cache
+            self.image_handler._cached_mask_overlay = None
             self.cached_composite = None
             self._update_mask_list()
             self._refresh_viewer()
@@ -1794,6 +1836,10 @@ class MainWindow(QMainWindow):
     def _toggle_transform(self, asset, key):
         asset.pipeline.config[key] = not asset.pipeline.config.get(key, False)
         asset.save_project()
+        # If it's a mask asset, invalidate mask overlay cache
+        from assets import MaskAsset
+        if isinstance(asset, MaskAsset):
+            self.image_handler._cached_mask_overlay = None
         self.cached_composite = None
         self._update_asset_list()
         self._refresh_viewer()
@@ -1815,6 +1861,9 @@ class MainWindow(QMainWindow):
         for name, asset in self.asset_manager.masks.items():
             asset.pipeline.config["invert"] = not asset.pipeline.config.get("invert", False)
             asset.save_project()
+        
+        # Invalidate mask overlay cache
+        self.image_handler._cached_mask_overlay = None
             
         self.cached_composite = None
         self._update_asset_list()
@@ -1871,6 +1920,9 @@ class MainWindow(QMainWindow):
         for name, asset in self.asset_manager.masks.items():
             asset.pipeline.config.setdefault("transforms", []).append({"type": "crop", "params": rect})
             asset.save_project()
+        
+        # Invalidate mask overlay cache
+        self.image_handler._cached_mask_overlay = None
         
         self.cached_composite = None
         self._update_asset_list()
@@ -2194,51 +2246,27 @@ class MainWindow(QMainWindow):
             return
 
         if self.cached_composite is None:
-            self.cached_composite = self.image_handler.render_composite(self.asset_manager)
+            # Use the new image_handler methods with caching
+            img_comp = self.image_handler.render_composite(self.asset_manager)
             
-            # Overlay masks
             if (self.visible_masks and self.working_dir) or self.preview_mask is not None:
-                if self.cached_composite is None:
-                    # If no images, we need a blank slate based on mask size
-                    if self.preview_mask is not None:
-                        h, w = self.preview_mask.shape
-                    else:
-                        mask_asset = self.asset_manager.get_mask_by_name(list(self.visible_masks)[0])
-                        if mask_asset:
-                            m = mask_asset.get_rendered_data(for_display=True)
-                            if m is not None:
-                                h, w = m.shape
-                            else:
-                                h, w = 1000, 1000 # Fallback
-                        else:
-                            h, w = 1000, 1000
-                    composite_rgb = np.zeros((h, w, 3), dtype=np.uint8)
-                else:
-                    # Use qimage2ndarray to convert QImage to numpy RGB safely
-                    composite_rgb = qimage2ndarray.rgb_view(self.cached_composite).copy()
-
+                # Use image_handler.render_mask_overlay for visible masks
                 if self.visible_masks and self.working_dir:
-                    for mask_name in sorted(self.visible_masks):
-                        mask_asset = self.asset_manager.get_mask_by_name(mask_name)
-                        if mask_asset:
-                            mask = mask_asset.get_rendered_data(for_display=True)
-                            if mask is None:
-                                continue
-                                
-                            if mask.shape[:2] != composite_rgb.shape[:2]:
-                                mask = cv2.resize(mask, (composite_rgb.shape[1], composite_rgb.shape[0]), interpolation=cv2.INTER_NEAREST)
-                            
-                            # Generate a color for the mask or use the selected one
-                            color = self.get_mask_color(mask_name)
-                            r, g, b = color.red(), color.green(), color.blue()
-                            
-                            # Blend mask using OpenCV/NumPy
-                            mask_bool = mask.astype(bool)
-                            overlay = composite_rgb.copy()
-                            overlay[mask_bool] = [r, g, b]
-                            cv2.addWeighted(overlay, self.mask_opacity, composite_rgb, 1 - self.mask_opacity, 0, composite_rgb)
+                    final_comp = self.image_handler.render_mask_overlay(
+                        img_comp, self.asset_manager, self.visible_masks, 
+                        self.mask_opacity, self.get_mask_color
+                    )
+                else:
+                    final_comp = img_comp
 
+                # Preview mask is still handled here as it's transient
                 if self.preview_mask is not None:
+                    if final_comp is None or final_comp.isNull():
+                        h, w = self.preview_mask.shape
+                        composite_rgb = np.zeros((h, w, 3), dtype=np.uint8)
+                    else:
+                        composite_rgb = qimage2ndarray.rgb_view(final_comp).copy()
+
                     mask = self.preview_mask
                     if mask.shape != composite_rgb.shape[:2]:
                         mask = cv2.resize(mask, (composite_rgb.shape[1], composite_rgb.shape[0]), interpolation=cv2.INTER_NEAREST)
@@ -2249,12 +2277,14 @@ class MainWindow(QMainWindow):
                     overlay = composite_rgb.copy()
                     overlay[mask_bool] = [r, g, b]
                     cv2.addWeighted(overlay, preview_opacity, composite_rgb, 1 - preview_opacity, 0, composite_rgb)
-                
-                # Convert back to QImage
-                self.cached_composite = qimage2ndarray.array2qimage(composite_rgb).copy()
+                    
+                    self.cached_composite = qimage2ndarray.array2qimage(composite_rgb).copy()
+                else:
+                    self.cached_composite = final_comp
+            else:
+                self.cached_composite = img_comp
 
         self.viewer_view.set_pixmap(self.cached_composite)
-        
         self.bg_label.lower()
 
     def _create_status_bar(self):

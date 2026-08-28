@@ -4,7 +4,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import cv2
 
-def create_histograms(measurements, mask_name, output_dir, source_masks=None, show_kde=True):
+def create_histograms(measurements, mask_name, output_dir, source_masks=None, show_kde=True, normalization=None):
     """
     Create individual histograms for each image's measurements.
     
@@ -14,6 +14,7 @@ def create_histograms(measurements, mask_name, output_dir, source_masks=None, sh
         output_dir (str): Directory to save the histogram images.
         source_masks (list, optional): List of source masks if the mask is a merged one.
         show_kde (bool): Whether to show KDE in the PNG.
+        normalization (str, optional): Type of normalization applied.
         
     Returns:
         list of str: List of filenames of the generated histograms.
@@ -33,8 +34,10 @@ def create_histograms(measurements, mask_name, output_dir, source_masks=None, sh
         title = f"Histogram of {image_name} under {mask_name}"
         if source_masks:
             title += f"\n(Sources: {', '.join(source_masks)})"
+        if normalization and normalization != "None":
+            title += f"\n(Normalization: {normalization})"
         plt.title(title)
-        plt.xlabel("Intensity")
+        plt.xlabel("Normalized Intensity" if normalization and normalization != "None" else "Intensity")
         plt.ylabel("Frequency")
         
         from export_plot_utils import get_safe_histogram_name

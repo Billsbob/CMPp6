@@ -20,6 +20,10 @@ class ImageDisplayHandler:
     def __init__(self):
         self.visible_assets = set()
         self.asset_colors = {}
+        self._cached_image_composite = None
+        self._cached_mask_overlay = None
+        self._visible_masks_cache_key = None
+        self._mask_opacity_cache = 1.0
 
     def get_default_color(self, name):
         # Deterministically pick a color for a name if not already set
@@ -33,6 +37,8 @@ class ImageDisplayHandler:
 
     def set_asset_color(self, name, color_name):
         self.asset_colors[name] = color_name
+        self._cached_image_composite = None
+        self._cached_mask_overlay = None
 
     def get_asset_color(self, name):
         return self.asset_colors.get(name, "grayscale")
@@ -42,6 +48,8 @@ class ImageDisplayHandler:
             self.visible_assets.remove(name)
         else:
             self.visible_assets.add(name)
+        self._cached_image_composite = None
+        self._cached_mask_overlay = None
 
     def is_visible(self, name):
         return name in self.visible_assets
@@ -118,6 +126,9 @@ class ImageDisplayHandler:
         return qimage2ndarray.array2qimage(arr).copy()
 
     def render_composite(self, asset_manager):
+        if self._cached_image_composite is not None:
+            return self._cached_image_composite
+
         num_images = len(self.visible_assets)
         if num_images == 0:
             return None
@@ -180,7 +191,64 @@ class ImageDisplayHandler:
             # Create a small black image as fallback
             qimg = QImage(100, 100, QImage.Format_RGB32)
             qimg.fill(0)
-        return qimg.copy()
+        
+        self._cached_image_composite = qimg.copy()
+        return self._cached_image_composite
+
+    def render_mask_overlay(self, image_composite, asset_manager, visible_masks, mask_opacity, get_mask_color_func):
+        """
+        Renders an overlay of masks onto an existing image composite.
+        image_composite: QImage
+        visible_masks: set of mask names
+        mask_opacity: float 0-1
+        get_mask_color_func: function that returns QColor for a mask name
+        """
+        if not visible_masks:
+            return image_composite
+
+        # Create a cache key for masks
+        cache_key = (tuple(sorted(visible_masks)), mask_opacity)
+        if self._cached_mask_overlay is not None and self._visible_masks_cache_key == cache_key and self._cached_image_composite == image_composite:
+            return self._cached_mask_overlay
+
+        if image_composite is None or image_composite.isNull():
+            # Determine size from first mask
+            mask_asset = asset_manager.get_mask_by_name(list(visible_masks)[0])
+            if mask_asset:
+                m = mask_asset.get_rendered_data(for_display=True)
+                if m is not None:
+                    h, w = m.shape[:2]
+                else:
+                    h, w = 1000, 1000
+            else:
+                h, w = 1000, 1000
+            composite_rgb = np.zeros((h, w, 3), dtype=np.uint8)
+        else:
+            composite_rgb = qimage2ndarray.rgb_view(image_composite).copy()
+
+        for mask_name in sorted(visible_masks):
+            mask_asset = asset_manager.get_mask_by_name(mask_name)
+            if not mask_asset:
+                continue
+            
+            mask_data = mask_asset.get_rendered_data(for_display=True)
+            if mask_data is None:
+                continue
+            
+            if mask_data.shape[:2] != composite_rgb.shape[:2]:
+                mask_data = cv2.resize(mask_data, (composite_rgb.shape[1], composite_rgb.shape[0]), interpolation=cv2.INTER_NEAREST)
+            
+            color = get_mask_color_func(mask_name)
+            r, g, b = color.red(), color.green(), color.blue()
+            
+            mask_bool = mask_data.astype(bool)
+            overlay = composite_rgb.copy()
+            overlay[mask_bool] = [r, g, b]
+            cv2.addWeighted(overlay, mask_opacity, composite_rgb, 1 - mask_opacity, 0, composite_rgb)
+
+        self._cached_mask_overlay = qimage2ndarray.array2qimage(composite_rgb).copy()
+        self._visible_masks_cache_key = cache_key
+        return self._cached_mask_overlay
 
     def save_visible(self, asset_manager, output_dir, filename, image_format):
         composite_qimg = self.render_composite(asset_manager)

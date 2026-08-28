@@ -34,7 +34,6 @@ args = [
     '--hidden-import', 'sklearn.neighbors._quad_tree',
     '--hidden-import', 'sklearn.tree._utils',
     '--hidden-import', 'sklearn.utils._cython_blas',
-    '--hidden-import', 'sklearn.neighbors._typedefs',
     '--hidden-import', 'scipy.special.cython_special',
     '--hidden-import', 'scipy.stats._stats',
     '--hidden-import', 'pandas._libs.tslibs.base',
@@ -75,14 +74,12 @@ if __name__ == '__main__':
     # This part is optional but helps in some cases to see what PyInstaller finds
     # PyInstaller.__main__.run(args) 
 
-    # Hidden imports for the spec file
     hidden_imports = [
         'sklearn.utils._typedefs',
         'sklearn.neighbors._partition_nodes',
         'sklearn.neighbors._quad_tree',
         'sklearn.tree._utils',
         'sklearn.utils._cython_blas',
-        'sklearn.neighbors._typedefs',
         'scipy.special.cython_special',
         'scipy.stats._stats',
         'pandas._libs.tslibs.base',

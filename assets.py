@@ -124,6 +124,8 @@ class Asset:
         self.base_name = os.path.basename(path)
         self.name = self.base_name
         self._data = None
+        self._cached_colored_data = None
+        self._cached_color_name = None
         self.pipeline = TransformPipeline()
 
     def get_json_path(self):
@@ -172,6 +174,26 @@ class Asset:
 
     def get_rendered_data(self, data_only=False, for_display=False):
         return self.pipeline.apply(self.data, data_only=data_only, for_display=for_display)
+
+    def get_colored_data(self, color_rgb):
+        """Returns the mask data multiplied by a color (R, G, B in 0-1)."""
+        data = self.get_rendered_data(for_display=True)
+        if data is None:
+            return None
+            
+        # Ensure mask is 0-1 for blending
+        if data.max() > 1.01 or data.min() < -0.01:
+            d_min, d_max = data.min(), data.max()
+            if d_max > d_min:
+                data = (data - d_min) / (d_max - d_min)
+            else:
+                data = np.zeros_like(data)
+
+        h, w = data.shape[:2]
+        colored = np.zeros((h, w, 3), dtype=np.float32)
+        for i in range(3):
+            colored[:, :, i] = data * color_rgb[i]
+        return colored
 
     def to_qimage(self, for_display=True):
         from image_handler import ImageDisplayHandler

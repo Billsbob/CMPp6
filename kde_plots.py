@@ -17,7 +17,7 @@ def truncate_image_name(name):
         return f"{parts[-2]}_{parts[-1]}"
     return base_name
 
-def create_joint_kde_plot(all_measurements, output_dir, user_filename=None):
+def create_joint_kde_plot(all_measurements, output_dir, user_filename=None, normalization=None):
     """
     Create a Joint KDE plot (Jointplot) for up to 3 sets of images under masks.
     
@@ -30,6 +30,7 @@ def create_joint_kde_plot(all_measurements, output_dir, user_filename=None):
             - 'y_values': list
         output_dir (str): Directory to save the plot image.
         user_filename (str, optional): Custom filename for the plot.
+        normalization (str, optional): Type of normalization applied.
         
     Returns:
         str: Filename of the generated jointplot.
@@ -60,7 +61,10 @@ def create_joint_kde_plot(all_measurements, output_dir, user_filename=None):
             mask_name = mask_name[:-4]
         # The user mentioned "image1 vs image2 under mask ##.npy, image3 vs image4 under mask ##.py"
         # We will follow this format for the description.
-        descriptions.append(f"Set {i+1}: {t_img1} vs {t_img2} under {mask_name}")
+        desc = f"Set {i+1}: {t_img1} vs {t_img2} under {mask_name}"
+        if normalization and normalization != "None":
+            desc += f" ({normalization})"
+        descriptions.append(desc)
 
     plt.figure(figsize=(12, 12))
     # We use a color palette for multiple sets
@@ -89,21 +93,23 @@ def create_joint_kde_plot(all_measurements, output_dir, user_filename=None):
     g.figure.subplots_adjust(top=0.9, bottom=0.2)
     
     # Set axis labels to image names
-    x_label = "Intensity 1"
-    y_label = "Intensity 2"
+    x_label = "Normalized Intensity 1" if normalization and normalization != "None" else "Intensity 1"
+    y_label = "Normalized Intensity 2" if normalization and normalization != "None" else "Intensity 2"
     if len(all_measurements) == 1:
-        x_label = truncate_image_name(all_measurements[0]['image1_name'])
-        y_label = truncate_image_name(all_measurements[0]['image2_name'])
+        prefix = "Normalized " if normalization and normalization != "None" else ""
+        x_label = prefix + truncate_image_name(all_measurements[0]['image1_name'])
+        y_label = prefix + truncate_image_name(all_measurements[0]['image2_name'])
     else:
         # Check if all sets have the same image1 and image2
         first_x = all_measurements[0]['image1_name']
         first_y = all_measurements[0]['image2_name']
         all_same_x = all(m['image1_name'] == first_x for m in all_measurements)
         all_same_y = all(m['image2_name'] == first_y for m in all_measurements)
+        prefix = "Normalized " if normalization and normalization != "None" else ""
         if all_same_x:
-            x_label = truncate_image_name(first_x)
+            x_label = prefix + truncate_image_name(first_x)
         if all_same_y:
-            y_label = truncate_image_name(first_y)
+            y_label = prefix + truncate_image_name(first_y)
 
     g.set_axis_labels(x_label, y_label)
     

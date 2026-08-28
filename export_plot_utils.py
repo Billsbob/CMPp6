@@ -87,8 +87,13 @@ def save_group_csv(measurements, mask_name, output_dir):
         column_header = get_safe_histogram_name(img_name, mask_name)
         if len(values) > 0:
             # Calculate frequency for each intensity (0-255)
-            # We assume values are in range 0-255. If not, np.histogram handles it.
-            counts, _ = np.histogram(values, bins=range(257))
+            # We assume values are in range 0-255. 
+            # If values are normalized (0-1), we scale them to 0-255 for the fixed-bin CSV export.
+            v = np.array(values)
+            if v.max() <= 1.0001 and v.min() >= -0.0001 and len(v) > 0 and v.max() > v.min():
+                counts, _ = np.histogram(v * 255.0, bins=range(257))
+            else:
+                counts, _ = np.histogram(v, bins=range(257))
             hist_data[column_header] = counts
         else:
             hist_data[column_header] = [0] * 256
