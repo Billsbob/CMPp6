@@ -17,9 +17,8 @@ def save_measurements_json(measurements, mask_name, output_dir):
         str: Path to the saved JSON file.
     """
     os.makedirs(output_dir, exist_ok=True)
-    # Strip .npy from mask name if present
-    if mask_name.lower().endswith(".npy"):
-        mask_name = mask_name[:-4]
+    # Strip extension from mask name if present
+    mask_name = os.path.splitext(mask_name)[0]
     
     safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in mask_name])
     json_filename = f"Histograms_{safe_mask_name}.json"
@@ -35,13 +34,12 @@ def get_safe_histogram_name(image_name, mask_name):
     Generate a name following the convention <Mask Name>_<Well Position>_<Probe>
     based on the image name and mask name.
     """
-    # Clean up image_name
+    # Clean up image_name (strip extension)
+    image_name = os.path.splitext(image_name)[0]
     safe_image_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in image_name])
     
-    # Strip .npy from mask name if present
-    temp_mask_name = mask_name
-    if temp_mask_name.lower().endswith(".npy"):
-        temp_mask_name = temp_mask_name[:-4]
+    # Strip extension from mask name if present
+    temp_mask_name = os.path.splitext(mask_name)[0]
     safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in temp_mask_name])
     
     # Image name format: <Sample>_<Slide ##>_<Owner Initials>_<ObjectiveMag>_<Well Position>_<Probe>
@@ -51,8 +49,6 @@ def get_safe_histogram_name(image_name, mask_name):
         slide = parts[1]
         well_position = parts[4]
         probe = parts[5]
-        # Remove extension from probe if it's the last part
-        probe = os.path.splitext(probe)[0]
         return f"{sample}_{slide}_{safe_mask_name}_{well_position}_{probe}"
     else:
         return f"{safe_mask_name}_{safe_image_name}"
@@ -71,9 +67,8 @@ def save_group_csv(measurements, mask_name, output_dir):
         str: Path to the saved CSV file.
     """
     os.makedirs(output_dir, exist_ok=True)
-    # Strip .npy from mask name if present
-    if mask_name.lower().endswith(".npy"):
-        mask_name = mask_name[:-4]
+    # Strip extension from mask name if present
+    mask_name = os.path.splitext(mask_name)[0]
     
     safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in mask_name])
     csv_filename = f"Histograms_{safe_mask_name}.csv"
