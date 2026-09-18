@@ -34,6 +34,11 @@ def apply_unsharp_mask(data, radius=2, percent=150, threshold=3):
     sharpened = data + diff * (percent / 100.0)
     return np.where(mask, sharpened, data).astype(data.dtype)
 
+def apply_bilateral_filter(data, d=9, sigma_color=75, sigma_space=75):
+    # Bilateral filter needs uint8 or float32. 
+    # cv2.bilateralFilter(src, d, sigmaColor, sigmaSpace[, dst[, borderType]])
+    return cv2.bilateralFilter(data, d, sigma_color, sigma_space)
+
 def rotate_image(data, angle, expand=False, crop_border=5, fill_color=0):
     if angle == 0:
         if crop_border > 0:

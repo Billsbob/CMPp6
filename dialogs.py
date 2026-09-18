@@ -49,6 +49,24 @@ class FilterParameterDialog(QDialog):
             self.threshold_spin.setValue(self.params.get("threshold", 3))
             self.threshold_spin.valueChanged.connect(lambda v: self._update_param("threshold", v))
             form_layout.addRow("Threshold:", self.threshold_spin)
+        elif self.filter_name == "bilateral":
+            self.d_spin = QSpinBox()
+            self.d_spin.setRange(1, 50)
+            self.d_spin.setValue(self.params.get("d", 9))
+            self.d_spin.valueChanged.connect(lambda v: self._update_param("d", v))
+            form_layout.addRow("Diameter (d):", self.d_spin)
+
+            self.sigma_color_spin = QDoubleSpinBox()
+            self.sigma_color_spin.setRange(1.0, 500.0)
+            self.sigma_color_spin.setValue(self.params.get("sigmaColor", 75.0))
+            self.sigma_color_spin.valueChanged.connect(lambda v: self._update_param("sigmaColor", v))
+            form_layout.addRow("Sigma Color:", self.sigma_color_spin)
+
+            self.sigma_space_spin = QDoubleSpinBox()
+            self.sigma_space_spin.setRange(1.0, 500.0)
+            self.sigma_space_spin.setValue(self.params.get("sigmaSpace", 75.0))
+            self.sigma_space_spin.valueChanged.connect(lambda v: self._update_param("sigmaSpace", v))
+            form_layout.addRow("Sigma Space:", self.sigma_space_spin)
 
         layout.addLayout(form_layout)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)

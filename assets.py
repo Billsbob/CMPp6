@@ -80,6 +80,14 @@ class TransformPipeline:
                 percent=p.get("percent", 150), 
                 threshold=p.get("threshold", 3)
             )
+        if "bilateral" in filters:
+            p = params.get("bilateral", {"d": 9, "sigmaColor": 75, "sigmaSpace": 75})
+            processed = image_manipulation.apply_bilateral_filter(
+                processed,
+                d=p.get("d", 9),
+                sigma_color=p.get("sigmaColor", 75),
+                sigma_space=p.get("sigmaSpace", 75)
+            )
         
         if "sharpen" in self.config.get("filters", []):
             # Use OpenCV for sharpening

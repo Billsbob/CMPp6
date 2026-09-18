@@ -23,6 +23,7 @@ import histogram_plots
 import kde_plots
 import export_plot_utils
 import mask_refinement
+import paint
 from reconciliation import reconcile_project_with_disk
 from workers import ClusteringWorker
 from widgets import ZoomableView
@@ -275,7 +276,7 @@ class MainWindow(QMainWindow):
         tools_menu.addAction(rotate_action)
 
         filters_menu = tools_menu.addMenu("Filters")
-        for f in ["gaussian", "median", "mean", "blur", "unsharp"]:
+        for f in ["gaussian", "median", "mean", "blur", "unsharp", "bilateral"]:
             action = QAction(f.capitalize(), self)
             action.triggered.connect(lambda checked=False, name=f: self._apply_filter_to_all(name))
             filters_menu.addAction(action)
@@ -292,6 +293,10 @@ class MainWindow(QMainWindow):
         undo_crop_action = QAction("Undo Crop All", self)
         undo_crop_action.triggered.connect(self._undo_crop_all)
         image_adjustments_menu.addAction(undo_crop_action)
+
+        undo_filters_action = QAction("Undo All Filters", self)
+        undo_filters_action.triggered.connect(self._undo_filters_all)
+        image_adjustments_menu.addAction(undo_filters_action)
 
         tools_menu.addSeparator()
         export_images_action = QAction("Export Modified Images", self)
@@ -329,6 +334,10 @@ class MainWindow(QMainWindow):
         analyze_menu.addAction(phenotype_masks_action)
 
         mask_menu = menu_bar.addMenu("Mask")
+        paint_action = QAction("Paint", self)
+        paint_action.triggered.connect(self._paint_mask)
+        mask_menu.addAction(paint_action)
+
         refine_mask_action = QAction("Refine Mask", self)
         refine_mask_action.triggered.connect(self._refine_mask)
         mask_menu.addAction(refine_mask_action)
@@ -1639,6 +1648,108 @@ class MainWindow(QMainWindow):
             finally:
                 QApplication.restoreOverrideCursor()
 
+    def _paint_mask(self):
+        if not self.working_dir:
+            QMessageBox.warning(self, "Paint Mask", "Please select a working directory first.")
+            return
+
+        selected_image_items = self.image_list.selectedItems()
+        selected_mask_items = self.mask_list.selectedItems()
+        
+        image_asset = None
+        mask_data = None
+        existing_mask_name = None
+
+        if len(selected_mask_items) == 1:
+            existing_mask_name = selected_mask_items[0].text()
+            mask_asset = self.asset_manager.get_mask_by_name(existing_mask_name)
+            if mask_asset:
+                try:
+                    mask_data = mask_asset.get_rendered_data(data_only=True)
+                except Exception as e:
+                    QMessageBox.warning(self, "Paint Mask", f"Failed to load mask data: {str(e)}")
+            
+            # Try to find associated image
+            # Many masks follow <ImageName>_<suffix>.png convention
+            potential_image_name = existing_mask_name.split('_')[0]
+            image_asset = self.asset_manager.get_image_by_name(potential_image_name)
+            
+            if not image_asset and len(selected_image_items) == 1:
+                image_asset = self.asset_manager.get_image_by_name(selected_image_items[0].text())
+            
+            if not image_asset:
+                # Ask user to select an image from visible images
+                visible_images = list(self.image_handler.visible_assets)
+                if not visible_images:
+                    QMessageBox.warning(self, "Paint Mask", "No visible images found to use as background.")
+                    return
+                
+                item, ok = QInputDialog.getItem(self, "Select Background Image", 
+                                                "Select the image to display behind the mask:", 
+                                                visible_images, 0, False)
+                if ok and item:
+                    image_asset = self.asset_manager.get_image_by_name(item)
+                else:
+                    return
+        elif len(selected_image_items) == 1:
+            image_name = selected_image_items[0].text()
+            image_asset = self.asset_manager.get_image_by_name(image_name)
+        else:
+            QMessageBox.warning(self, "Paint Mask", "Please select exactly one image or one mask to paint.")
+            return
+
+        if not image_asset:
+            return
+
+        dialog = paint.PaintDialog(image_asset, mask_data=mask_data, parent=self)
+        if dialog.exec() == QDialog.Accepted:
+            try:
+                mask = dialog.get_mask()
+                
+                # Save the mask
+                mask_dir = os.path.join(self.working_dir, "Cluster Masks")
+                if not os.path.exists(mask_dir):
+                    os.makedirs(mask_dir)
+                
+                if existing_mask_name:
+                    reply = QMessageBox.question(self, "Save Mask", 
+                                               f"Do you want to overwrite the existing mask '{existing_mask_name}'?",
+                                               QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+                    if reply == QMessageBox.Cancel:
+                        return
+                    elif reply == QMessageBox.Yes:
+                        mask_path = os.path.join(mask_dir, existing_mask_name)
+                        mask_name = existing_mask_name
+                    else:
+                        # Find a new unique name
+                        base_name = os.path.splitext(existing_mask_name)[0]
+                        counter = 1
+                        while True:
+                            mask_name = f"{base_name}_v{counter}.png"
+                            mask_path = os.path.join(mask_dir, mask_name)
+                            if not os.path.exists(mask_path):
+                                break
+                            counter += 1
+                else:
+                    image_name = image_asset.base_name
+                    base_name = os.path.splitext(image_name)[0]
+                    # Find a unique name
+                    counter = 1
+                    while True:
+                        mask_name = f"{base_name}_paint_{counter}.png"
+                        mask_path = os.path.join(mask_dir, mask_name)
+                        if not os.path.exists(mask_path):
+                            break
+                        counter += 1
+                
+                cv2.imwrite(mask_path, mask)
+                
+                self.asset_manager.scan_assets()
+                self._update_mask_list()
+                self.statusBar().showMessage(f"Mask {mask_name} saved.", 3000)
+            except Exception as e:
+                QMessageBox.critical(self, "Paint Mask", f"Error saving painted mask: {str(e)}")
+
     def _show_mask_properties(self):
         if not self.working_dir:
             QMessageBox.warning(self, "Properties Table", "Please select a working directory first.")
@@ -1886,6 +1997,23 @@ class MainWindow(QMainWindow):
             asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "rotate"]
             asset.save_project()
         
+        # Invalidate mask overlay cache
+        self.image_handler._cached_mask_overlay = None
+
+        # Reset mask phenotypes if they exist since image/mask dimensions changed
+        if hasattr(self.asset_manager, 'mask_phenotypes'):
+            self.asset_manager.mask_phenotypes = []
+            project_json_path = self.asset_manager.get_project_json_path()
+            if project_json_path and os.path.exists(project_json_path):
+                try:
+                    with open(project_json_path, 'r') as f:
+                        project_data = json.load(f)
+                    project_data["Mask Phenotypes"] = []
+                    with open(project_json_path, 'w') as f:
+                        json.dump(project_data, f, indent=4)
+                except:
+                    pass
+
         self.cached_composite = None
         self._update_asset_list()
         self._update_mask_list()
@@ -1909,6 +2037,48 @@ class MainWindow(QMainWindow):
         for name, asset in self.asset_manager.masks.items():
             transforms = asset.pipeline.config.get("transforms", [])
             asset.pipeline.config["transforms"] = [t for t in transforms if t.get("type") != "crop"]
+            asset.save_project()
+        
+        # Invalidate mask overlay cache
+        self.image_handler._cached_mask_overlay = None
+
+        # Reset mask phenotypes if they exist since image/mask dimensions changed
+        if hasattr(self.asset_manager, 'mask_phenotypes'):
+            self.asset_manager.mask_phenotypes = []
+            project_json_path = self.asset_manager.get_project_json_path()
+            if project_json_path and os.path.exists(project_json_path):
+                try:
+                    with open(project_json_path, 'r') as f:
+                        project_data = json.load(f)
+                    project_data["Mask Phenotypes"] = []
+                    with open(project_json_path, 'w') as f:
+                        json.dump(project_data, f, indent=4)
+                except:
+                    pass
+
+        self.cached_composite = None
+        self._update_asset_list()
+        self._update_mask_list()
+        self._refresh_viewer()
+
+    def _undo_filters_all(self):
+        if not self.asset_manager.images:
+            return
+            
+        reply = QMessageBox.warning(self, "Undo for All", 
+                                  "This will REMOVE ALL filters from ALL loaded images. Do you want to continue?",
+                                  QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.No:
+            return
+
+        for name, asset in self.asset_manager.images.items():
+            asset.pipeline.config["filters"] = []
+            asset.pipeline.config["filter_params"] = {}
+            asset.save_project()
+        
+        for name, asset in self.asset_manager.masks.items():
+            asset.pipeline.config["filters"] = []
+            asset.pipeline.config["filter_params"] = {}
             asset.save_project()
         
         self.cached_composite = None
@@ -2030,6 +2200,21 @@ class MainWindow(QMainWindow):
         # Invalidate mask overlay cache
         self.image_handler._cached_mask_overlay = None
         
+        # Reset mask phenotypes if they exist since image/mask dimensions changed
+        if hasattr(self.asset_manager, 'mask_phenotypes'):
+            self.asset_manager.mask_phenotypes = []
+            # We also need to update project JSON to reflect this
+            project_json_path = self.asset_manager.get_project_json_path()
+            if project_json_path and os.path.exists(project_json_path):
+                try:
+                    with open(project_json_path, 'r') as f:
+                        project_data = json.load(f)
+                    project_data["Mask Phenotypes"] = []
+                    with open(project_json_path, 'w') as f:
+                        json.dump(project_data, f, indent=4)
+                except:
+                    pass
+
         self.cached_composite = None
         self._update_asset_list()
         self._update_mask_list()
@@ -2112,6 +2297,23 @@ class MainWindow(QMainWindow):
                 "fill_color": fill_color.lower()
             })
             asset.save_project()
+
+        # Invalidate mask overlay cache
+        self.image_handler._cached_mask_overlay = None
+
+        # Reset mask phenotypes if they exist since image/mask dimensions changed
+        if hasattr(self.asset_manager, 'mask_phenotypes'):
+            self.asset_manager.mask_phenotypes = []
+            project_json_path = self.asset_manager.get_project_json_path()
+            if project_json_path and os.path.exists(project_json_path):
+                try:
+                    with open(project_json_path, 'r') as f:
+                        project_data = json.load(f)
+                    project_data["Mask Phenotypes"] = []
+                    with open(project_json_path, 'w') as f:
+                        json.dump(project_data, f, indent=4)
+                except:
+                    pass
 
         self.cached_composite = None
         self.viewer_view.clear_rotation_line()
