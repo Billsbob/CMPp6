@@ -3,6 +3,7 @@ import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 import cv2
+from naming_utils import parse_image_identity, strip_extension, sanitize_name
 
 def truncate_image_name(name):
     """
@@ -10,12 +11,11 @@ def truncate_image_name(name):
     If the name has less than two signifiers separated by underscores,
     it returns the entire name without extension.
     """
-    # Remove extension if present
-    base_name = os.path.splitext(name)[0]
-    parts = base_name.split('_')
+    identity = parse_image_identity(name)
+    parts = identity.base_name.split('_')
     if len(parts) >= 2:
         return f"{parts[-2]}_{parts[-1]}"
-    return base_name
+    return identity.base_name
 
 def create_joint_kde_plot(all_measurements, output_dir, user_filename=None, normalization=None):
     """
@@ -56,9 +56,8 @@ def create_joint_kde_plot(all_measurements, output_dir, user_filename=None, norm
         t_img1 = truncate_image_name(m['image1_name'])
         t_img2 = truncate_image_name(m['image2_name'])
         mask_name = m['mask_name']
-        # Strip .npy from mask name if present
-        if mask_name.lower().endswith(".npy"):
-            mask_name = mask_name[:-4]
+        # Strip extension from mask name if present
+        mask_name = os.path.splitext(mask_name)[0]
         # The user mentioned "image1 vs image2 under mask ##.npy, image3 vs image4 under mask ##.py"
         # We will follow this format for the description.
         desc = f"Set {i+1}: {t_img1} vs {t_img2} under {mask_name}"
@@ -138,8 +137,8 @@ def create_joint_kde_plot(all_measurements, output_dir, user_filename=None, norm
         safe_image2 = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in truncate_image_name(m['image2_name'])])
         
         mask_name = m['mask_name']
-        if mask_name.lower().endswith(".npy"):
-            mask_name = mask_name[:-4]
+        # Strip extension from mask name if present
+        mask_name = os.path.splitext(mask_name)[0]
         safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in mask_name])
         filename = f"JointPlot_{safe_image1}_vs_{safe_image2}_{safe_mask_name}.png"
     else:

@@ -7,6 +7,7 @@ import image_manipulation
 import cv2
 import qimage2ndarray
 from PySide6.QtGui import QImage, QPixmap
+from naming_utils import parse_image_identity
 
 class TransformPipeline:
     def __init__(self, config=None):
@@ -294,9 +295,9 @@ class AssetManager:
 
         # Use the first image to determine the project name
         first_image = image_list[0]
-        parts = first_image.split('_')
-        if len(parts) >= 2:
-            project_name = f"{parts[0]}_{parts[1]}_"
+        identity = parse_image_identity(first_image)
+        if identity.sample and identity.slide:
+            project_name = f"{identity.sample}_{identity.slide}_"
         else:
             project_name = os.path.basename(self.working_dir) + "_"
 
@@ -432,27 +433,27 @@ class AssetManager:
         
         Rules:
         - <Sample>: Numbers
-        - <Slide ##>: Numbers
+        - <Slide ##>: Alpha-numeric
         - <Owner Initials>: Letters
         - <ObjectiveMag>: Number followed by 'x' or 'X'
         - <Well Position>: Number between 1 and 12
-        - Probe: Letters, no numbers
+        - Probe: Alpha-numeric
         """
         invalid_files = []
         if not self.working_dir:
             return invalid_files
-
+        
         import re
         # Pattern components:
         # ^(\d+)                  : <Sample> (numbers)
-        # _(\d+)                  : <Slide ##> (numbers)
+        # _([a-zA-Z0-9]+)         : <Slide ##> (alpha-numeric)
         # _([a-zA-Z]+)            : <Owner Initials> (letters)
         # _(\d+[xX])              : <ObjectiveMag> (number followed by x or X)
         # _(\d+)                  : <Well Position> (we'll check 1-12 range manually or with regex)
-        # _([a-zA-Z]+)            : <Probe> (letters, no numbers)
+        # _([a-zA-Z0-9]+)         : <Probe> (alpha-numeric)
         # \.[^.]+$                : file extension
         
-        pattern = re.compile(r'^(\d+)_(\d+)_([a-zA-Z]+)_(\d+[xX])_(\d+)_([a-zA-Z]+)\.[^.]+$')
+        pattern = re.compile(r'^(\d+)_([a-zA-Z0-9]+)_([a-zA-Z]+)_(\d+[xX])_(\d+)_([a-zA-Z0-9]+)\.[^.]+$')
 
         for f in os.listdir(self.working_dir):
             if f.lower().endswith(('.tif', '.tiff', '.png', '.bmp', '.jpg', '.jpeg')):

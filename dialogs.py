@@ -2,10 +2,11 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QDoubleSpinBox, QSpinBox, 
     QDialogButtonBox, QComboBox, QCheckBox, QLabel, QListWidget, 
     QPushButton, QListWidgetItem, QMessageBox, QWidget, QLineEdit,
-    QTableWidget, QTableWidgetItem, QHeaderView, QHBoxLayout
+    QTableWidget, QTableWidgetItem, QHeaderView, QHBoxLayout, QColorDialog
 )
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtGui import QColor, QPixmap, QPainter
+from naming_utils import parse_image_identity
 
 class FilterParameterDialog(QDialog):
     def __init__(self, filter_name, initial_params, parent=None):
@@ -626,4 +627,169 @@ class MaskPropertiesDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Ok)
         buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
+
+class ProbeColorRuleDialog(QDialog):
+    def __init__(self, probe_names, initial_colors=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Set Color Rules for Probes")
+        self.resize(400, 500)
+        self.probe_names = sorted(list(set(probe_names)))
+        self.colors = initial_colors.copy() if initial_colors else {}
+        self.color_buttons = {}
+        self.setup_ui()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        from PySide6.QtWidgets import QScrollArea
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        
+        for probe in self.probe_names:
+            h_layout = QHBoxLayout()
+            label = QLabel(probe)
+            
+            # Create a color button
+            btn = QPushButton()
+            btn.setFixedWidth(50)
+            color = self.colors.get(probe, "#ffffff")
+            self._update_button_color(btn, color)
+            btn.clicked.connect(lambda checked=False, p=probe, b=btn: self._pick_color(p, b))
+            
+            h_layout.addWidget(label)
+            h_layout.addStretch()
+            h_layout.addWidget(btn)
+            scroll_layout.addLayout(h_layout)
+            self.color_buttons[probe] = btn
+            
+        scroll.setWidget(scroll_content)
+        layout.addWidget(scroll)
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _update_button_color(self, button, color_hex):
+        pixmap = QPixmap(30, 20)
+        pixmap.fill(QColor(color_hex))
+        button.setIcon(pixmap)
+        button.setIconSize(QSize(30, 20))
+
+    def _pick_color(self, probe, button):
+        initial_color = QColor(self.colors.get(probe, "#ffffff"))
+        color = QColorDialog.getColor(initial_color, self, f"Select Color for {probe}")
+        if color.isValid():
+            hex_color = color.name()
+            self.colors[probe] = hex_color
+            self._update_button_color(button, hex_color)
+
+    def get_colors(self):
+        return self.colors
+
+class MetadataAssignmentDialog(QDialog):
+    def __init__(self, file_list, parent=None):
+        super().__init__(parent)
+        self.file_list = file_list
+        self.results = {}
+        self.setup_ui()
+        self.auto_assign_all()
+
+    def setup_ui(self):
+        self.setWindowTitle("Assign File Metadata")
+        self.resize(1000, 600)
+        layout = QVBoxLayout(self)
+
+        instruction = QLabel("Review and specify metadata for the files in the working directory.")
+        layout.addWidget(instruction)
+
+        self.table = QTableWidget(len(self.file_list), 7)
+        self.table.setHorizontalHeaderLabels([
+            "Original Filename", "Sample", "Slide ##", "Owner", 
+            "Objective", "Well Position", "Probe"
+        ])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+
+        for i, filename in enumerate(self.file_list):
+            self.table.setItem(i, 0, QTableWidgetItem(filename))
+            self.table.item(i, 0).setFlags(self.table.item(i, 0).flags() & ~Qt.ItemIsEditable)
+            
+            for j in range(1, 7):
+                self.table.setItem(i, j, QTableWidgetItem(""))
+
+        layout.addWidget(self.table)
+
+        btn_layout = QHBoxLayout()
+        self.auto_btn = QPushButton("Auto-Assign All")
+        self.auto_btn.clicked.connect(self.auto_assign_all)
+        btn_layout.addWidget(self.auto_btn)
+        
+        btn_layout.addStretch()
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.validate_and_accept)
+        buttons.rejected.connect(self.reject)
+        btn_layout.addWidget(buttons)
+        
+        layout.addLayout(btn_layout)
+
+    def auto_assign_all(self):
+        for i in range(self.table.rowCount()):
+            filename = self.table.item(i, 0).text()
+            identity = parse_image_identity(filename)
+            
+            if identity.sample: self.table.setItem(i, 1, QTableWidgetItem(identity.sample))
+            if identity.slide: self.table.setItem(i, 2, QTableWidgetItem(identity.slide))
+            if identity.owner: self.table.setItem(i, 3, QTableWidgetItem(identity.owner))
+            if identity.objective: self.table.setItem(i, 4, QTableWidgetItem(identity.objective))
+            if identity.well_position: self.table.setItem(i, 5, QTableWidgetItem(identity.well_position))
+            if identity.probe: self.table.setItem(i, 6, QTableWidgetItem(identity.probe))
+
+    def validate_and_accept(self):
+        self.results = {}
+        for i in range(self.table.rowCount()):
+            filename = self.table.item(i, 0).text()
+            metadata = []
+            for j in range(1, 7):
+                val = self.table.item(i, j).text().strip()
+                if not val:
+                    QMessageBox.warning(self, "Missing Data", f"Please fill all fields for {filename}")
+                    return
+                metadata.append(val)
+            
+            # Simple validation to match naming convention expectations
+            # Sample: Numbers
+            if not metadata[0].isdigit():
+                QMessageBox.warning(self, "Invalid Data", f"Sample must be numeric for {filename}")
+                return
+            # Slide ##: Alpha-numeric
+            if not metadata[1].isalnum():
+                QMessageBox.warning(self, "Invalid Data", f"Slide ## must be alpha-numeric for {filename}")
+                return
+            # Owner: Letters
+            if not metadata[2].isalpha():
+                QMessageBox.warning(self, "Invalid Data", f"Owner Initials must be letters for {filename}")
+                return
+            # Objective: Number + x/X
+            if not (metadata[3][:-1].isdigit() and metadata[3][-1].lower() == 'x'):
+                QMessageBox.warning(self, "Invalid Data", f"Objective must be number + 'x' for {filename}")
+                return
+            # Well Position: Number 1-12
+            if not (metadata[4].isdigit() and 1 <= int(metadata[4]) <= 12):
+                QMessageBox.warning(self, "Invalid Data", f"Well Position must be 1-12 for {filename}")
+                return
+            # Probe: Alpha-numeric
+            if not metadata[5].isalnum():
+                QMessageBox.warning(self, "Invalid Data", f"Probe must be alpha-numeric for {filename}")
+                return
+
+            self.results[filename] = metadata
+            
+        self.accept()
+
+    def get_results(self):
+        return self.results
 

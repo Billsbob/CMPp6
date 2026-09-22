@@ -110,7 +110,7 @@ def main():
         
         for i, mask in enumerate(individual_masks):
             cluster_id = i + 1
-            mask_name = f"{mask_root_name}_cluster_{cluster_id}.npy"
+            mask_name = f"{mask_root_name}cluster{cluster_id}.npy"
             mask_path = os.path.join(mask_dir, mask_name)
             np.save(mask_path, mask)
             print(f"\nProcessing Cluster {cluster_id}")

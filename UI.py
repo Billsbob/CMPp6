@@ -30,8 +30,10 @@ from widgets import ZoomableView
 from dialogs import (
     FilterParameterDialog, ClusterParameterDialog, ISODATAParameterDialog,
     GMMParameterDialog, ThresholdParameterDialog, JointPlotDialog,
-    RefineMaskDialog, MaskPropertiesDialog
+    RefineMaskDialog, MaskPropertiesDialog, ProbeColorRuleDialog,
+    MetadataAssignmentDialog
 )
+from naming_utils import parse_image_identity, build_histogram_identity, sanitize_name, strip_extension
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -48,6 +50,7 @@ class MainWindow(QMainWindow):
         self.preview_color = QColor(255, 255, 255) # White for preview
         self.graphs_window = None
         self.stop_btn = None
+        self.probe_colors = {}
 
         self._create_menu_bar()
         self._create_status_bar()
@@ -383,6 +386,38 @@ class MainWindow(QMainWindow):
         # Reconcile project JSON with items on disk
         reconcile_project_with_disk(self.asset_manager, self)
         
+        # Metadata assignment dialog
+        image_files = []
+        for f in os.listdir(directory):
+            if f.lower().endswith(('.tif', '.tiff', '.png', '.bmp', '.jpg', '.jpeg')):
+                image_files.append(f)
+        
+        if image_files:
+            dialog = MetadataAssignmentDialog(image_files, self)
+            if dialog.exec() == QDialog.Accepted:
+                results = dialog.get_results()
+                # Rename files based on metadata
+                import shutil
+                for old_name, metadata in results.items():
+                    ext = os.path.splitext(old_name)[1]
+                    new_name = f"{metadata[0]}_{metadata[1]}_{metadata[2]}_{metadata[3]}_{metadata[4]}_{metadata[5]}{ext}"
+                    if old_name != new_name:
+                        old_path = os.path.join(directory, old_name)
+                        new_path = os.path.join(directory, new_name)
+                        if os.path.exists(new_path):
+                            reply = QMessageBox.question(self, "Overwrite File", 
+                                                        f"File {new_name} already exists. Overwrite?",
+                                                        QMessageBox.Yes | QMessageBox.No)
+                            if reply == QMessageBox.No:
+                                continue
+                        try:
+                            shutil.move(old_path, new_path)
+                        except Exception as e:
+                            QMessageBox.critical(self, "Error", f"Failed to rename {old_name}: {str(e)}")
+                
+                # Re-scan after potential renames
+                self.asset_manager.scan_assets()
+        
         # Check for naming convention violations
         invalid_files = self.asset_manager.validate_filenames()
         if invalid_files:
@@ -480,7 +515,9 @@ class MainWindow(QMainWindow):
         
         for name in self.asset_manager.get_mask_list():
             asset = self.asset_manager.get_mask_by_name(name)
-            item = QListWidgetItem(name)
+            display_name = os.path.splitext(name)[0]
+            item = QListWidgetItem(display_name)
+            item.setData(Qt.UserRole, name)
             qimg = asset.to_qimage()
             if qimg.isNull():
                 qimg = QImage(100, 100, QImage.Format_ARGB32)
@@ -551,7 +588,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Graphing", "Please select at least one cluster mask.")
             return
         
-        mask_names = [item.text() for item in selected_masks]
+        mask_names = [item.data(Qt.UserRole) for item in selected_masks]
 
         selected_images = self.image_list.selectedItems()
         if not selected_images:
@@ -581,9 +618,9 @@ class MainWindow(QMainWindow):
             image_list = self.asset_manager.get_image_list()
             project_name = "project_"
             if image_list:
-                parts = image_list[0].split('_')
-                if len(parts) >= 2:
-                    project_name = f"{parts[0]}_{parts[1]}_"
+                identity = parse_image_identity(image_list[0])
+                if identity.sample and identity.slide:
+                    project_name = f"{identity.sample}_{identity.slide}_"
             
             json_dir = os.path.join(self.working_dir, "JSON")
             project_json_path = os.path.join(json_dir, f"{project_name}.json")
@@ -615,7 +652,7 @@ class MainWindow(QMainWindow):
                 hist_files = histogram_plots.create_histograms(
                     measurements, mask_name, graph_dir, 
                     source_masks=source_masks, show_kde=True,
-                    normalization=item
+                    normalization=item, color_palette=self.probe_colors
                 )
                 json_measurements_path = export_plot_utils.save_measurements_json(measurements, mask_name, graph_dir)
                 csv_measurements_path = export_plot_utils.save_group_csv(measurements, mask_name, graph_dir)
@@ -640,16 +677,14 @@ class MainWindow(QMainWindow):
                     probe_name = "Unknown"
                     
                     for img_name, values in measurements.items():
-                        from export_plot_utils import get_safe_histogram_name
-                        expected_name = f"{get_safe_histogram_name(img_name, mask_name)}.png"
+                        identity = build_histogram_identity(img_name, mask_name)
+                        expected_name = f"{identity.safe_filename_base}.png"
                         
                         if hist_file == expected_name:
-                            parts = img_name.split('_')
-                            if len(parts) >= 6:
-                                sample_name = parts[0]
-                                slide_number = parts[1]
-                                well_position = parts[4]
-                                probe_name = os.path.splitext(parts[5])[0]
+                            sample_name = identity.image.sample or "Unknown"
+                            slide_number = identity.image.slide or "Unknown"
+                            well_position = identity.image.well_position or "Unknown"
+                            probe_name = identity.image.probe or "Unknown"
                                 
                             v = np.array(values)
                             if len(v) > 0:
@@ -801,7 +836,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Selection", "Please select one or more masks to phenotype.")
             return
             
-        selected_masks = [item.text() for item in selected_items]
+        selected_masks = [item.data(Qt.UserRole) for item in selected_items]
         
         # Check if images are also selected
         selected_images = self.image_list.selectedItems()
@@ -847,14 +882,14 @@ class MainWindow(QMainWindow):
             image_list = self.asset_manager.get_image_list()
             project_name = None
             if image_list:
-                parts = image_list[0].split('_')
-                if len(parts) >= 2:
-                    project_name = f"{parts[0]}_{parts[1]}"
+                identity = parse_image_identity(image_list[0])
+                if identity.sample and identity.slide:
+                    project_name = f"{identity.sample}_{identity.slide}"
             
             csv_paths = mask_phenotyping.phenotype_masks(
                 self.asset_manager, selected_masks, output_dir, tissue_mask, tissue_type,
                 image_names=image_names, normalization_type=normalization_type,
-                project_name=project_name
+                project_name=project_name, color_palette=self.probe_colors
             )
             
             if csv_paths:
@@ -873,12 +908,43 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
 
+    def _open_color_rules_dialog(self):
+        # Collect all probes from images in asset_manager
+        probe_names = set()
+        image_list = self.asset_manager.get_image_list()
+        for img_name in image_list:
+            identity = parse_image_identity(img_name)
+            if identity.probe:
+                probe_names.add(identity.probe)
+        
+        if not probe_names:
+            QMessageBox.information(self, "Color Rules", "No probes found in the current project.")
+            return
+
+        dialog = ProbeColorRuleDialog(list(probe_names), initial_colors=self.probe_colors, parent=self)
+        if dialog.exec():
+            self.probe_colors = dialog.get_colors()
+            # Refresh graphs window if it's open
+            if self.graphs_window and self.graphs_window.isVisible():
+                self._show_graphs_window()
+
     def _show_graphs_window(self):
         if self.graphs_window is None or not self.graphs_window.isVisible():
             self.graphs_window = QMdiSubWindow()
             self.graphs_window.setWindowTitle("Graphs")
             self.graphs_window.resize(800, 600)
             
+            main_container = QWidget()
+            main_v_layout = QVBoxLayout(main_container)
+            
+            # Toolbar at the top
+            toolbar = QHBoxLayout()
+            self.color_rules_btn = QPushButton("Set Color Rules")
+            self.color_rules_btn.clicked.connect(self._open_color_rules_dialog)
+            toolbar.addWidget(self.color_rules_btn)
+            toolbar.addStretch()
+            main_v_layout.addLayout(toolbar)
+
             scroll_area = QWidget()
             self.graphs_layout = QVBoxLayout(scroll_area)
             
@@ -887,7 +953,8 @@ class MainWindow(QMainWindow):
             sa.setWidgetResizable(True)
             sa.setWidget(scroll_area)
             
-            self.graphs_window.setWidget(sa)
+            main_v_layout.addWidget(sa)
+            self.graphs_window.setWidget(main_container)
             self.mdi_area.addSubWindow(self.graphs_window)
             self.graphs_window.show()
         
@@ -921,9 +988,9 @@ class MainWindow(QMainWindow):
             image_list = self.asset_manager.get_image_list()
             project_name = "project_"
             if image_list:
-                parts = image_list[0].split('_')
-                if len(parts) >= 2:
-                    project_name = f"{parts[0]}_{parts[1]}_"
+                identity = parse_image_identity(image_list[0])
+                if identity.sample and identity.slide:
+                    project_name = f"{identity.sample}_{identity.slide}_"
             
             json_dir = os.path.join(self.working_dir, "JSON")
             project_json_path = os.path.join(json_dir, f"{project_name}.json")
@@ -964,15 +1031,21 @@ class MainWindow(QMainWindow):
                                 from export_plot_utils import get_safe_histogram_name
                                 column_header = get_safe_histogram_name(img_name, mask_name)
                                 if column_header in name:
-                                    items_to_render.append((f"{img_name} ({mask_name})", values))
+                                    items_to_render.append((f"{img_name} ({mask_name})", values, mask_name, img_name))
                                     found = True
                                     break
                             if found: break
                 
                 if items_to_render:
-                    combined_rgb = histogram_plots.create_dynamic_overlaid_histogram(items_to_render, source_masks=source_masks, show_kde=True)
+                    combined_rgb = histogram_plots.create_mask_separated_histograms(
+                        items_to_render, show_kde=True, probe_colors=self.probe_colors
+                    )
             else:
                 # Fast rendering - Load CSV counts
+                # Not changing fast rendering as it might not support the new layout easily without values
+                # and the requirement seems to target the main display.
+                # However, to be consistent, we might want to update it too.
+                # For now, let's keep it simple.
                 mask_to_counts = {}
                 if os.path.exists(graph_dir):
                     for f in os.listdir(graph_dir):
@@ -997,12 +1070,17 @@ class MainWindow(QMainWindow):
                             source_masks = project_data.get("Masks", {}).get(mask_name, {}).get("source_masks")
                             if name_no_ext in df.columns:
                                 counts = df[name_no_ext].values
-                                items_to_render.append((name_no_ext, counts))
+                                # We need image name for formatting legend. 
+                                # In CSV headers, it is get_safe_histogram_name(img_name, mask_name)
+                                # We might need to reverse engineer it or just use the header.
+                                items_to_render.append((name_no_ext, counts, mask_name, name_no_ext))
                                 found = True
                         if found: break
                 
                 if items_to_render:
-                    combined_rgb = histogram_plots.render_fast_overlay(items_to_render, source_masks=source_masks)
+                    combined_rgb = histogram_plots.render_mask_separated_fast_overlay(
+                        items_to_render, probe_colors=self.probe_colors
+                    )
 
             if items_to_render and combined_rgb is not None:
                 combined_rgb = np.ascontiguousarray(combined_rgb)
@@ -1027,9 +1105,9 @@ class MainWindow(QMainWindow):
         image_list = self.asset_manager.get_image_list()
         project_name = "project_"
         if image_list:
-            parts = image_list[0].split('_')
-            if len(parts) >= 2:
-                project_name = f"{parts[0]}_{parts[1]}_"
+            identity = parse_image_identity(image_list[0])
+            if identity.sample and identity.slide:
+                project_name = f"{identity.sample}_{identity.slide}_"
         
         json_dir = os.path.join(self.working_dir, "JSON")
         project_json_path = os.path.join(json_dir, f"{project_name}.json")
@@ -1042,56 +1120,49 @@ class MainWindow(QMainWindow):
             except:
                 pass
 
-        if len(selected) == 1:
-            # Just copy the file
-            import shutil
-            shutil.copy(os.path.join(graph_dir, selected[0].text()), path)
-            QMessageBox.information(self, "Save PNG", f"Graph saved to {path}")
-        else:
-            # Create and save combined - ALWAYS HIGH QUALITY
-            items_measurements = []
-            
-            mask_to_measurements = {}
-            if os.path.exists(graph_dir):
-                for f in os.listdir(graph_dir):
-                    if f.startswith("Histograms_") and f.endswith(".json"):
-                        mask_name_from_json = f[len("Histograms_"):-len(".json")]
-                        try:
-                            with open(os.path.join(graph_dir, f), 'r') as jf:
-                                mask_to_measurements[mask_name_from_json] = json.load(jf)
-                        except:
-                            pass
-
-            source_masks_list = []
-            for item in selected:
-                name = item.text()
-                if name.startswith("JointPlot_"):
-                    continue
-
-                found = False
-                for mask_name, measurements in mask_to_measurements.items():
-                    if mask_name in name:
-                        # Track source masks if any
-                        s_masks = project_data.get("Masks", {}).get(mask_name, {}).get("source_masks")
-                        if s_masks:
-                            source_masks_list.extend(s_masks)
-
-                        for img_name, values in measurements.items():
-                            # Use the new naming convention to match the graph name
-                            from export_plot_utils import get_safe_histogram_name
-                            column_header = get_safe_histogram_name(img_name, mask_name)
-                        
-                            if column_header in name:
-                                items_measurements.append((column_header, values))
-                                found = True
-                                break
-                        if found: break
+            if len(selected) == 1:
+                # Just copy the file
+                import shutil
+                shutil.copy(os.path.join(graph_dir, selected[0].text()), path)
+                QMessageBox.information(self, "Save PNG", f"Graph saved to {path}")
+            else:
+                # Create and save combined - ALWAYS HIGH QUALITY
+                items_measurements = []
                 
-            if items_measurements:
-                # Remove duplicates from source_masks_list
-                unique_sources = sorted(list(set(source_masks_list)))
-                histogram_plots.create_dynamic_overlaid_histogram(items_measurements, output_path=path, source_masks=unique_sources if unique_sources else None, show_kde=True)
-                QMessageBox.information(self, "Save PNG", f"Combined high-quality histogram saved to {path}")
+                mask_to_measurements = {}
+                if os.path.exists(graph_dir):
+                    for f in os.listdir(graph_dir):
+                        if f.startswith("Histograms_") and f.endswith(".json"):
+                            mask_name_from_json = f[len("Histograms_"):-len(".json")]
+                            try:
+                                with open(os.path.join(graph_dir, f), 'r') as jf:
+                                    mask_to_measurements[mask_name_from_json] = json.load(jf)
+                            except:
+                                pass
+
+                for item in selected:
+                    name = item.text()
+                    if name.startswith("JointPlot_"):
+                        continue
+
+                    found = False
+                    for mask_name, measurements in mask_to_measurements.items():
+                        if mask_name in name:
+                            for img_name, values in measurements.items():
+                                identity = build_histogram_identity(img_name, mask_name)
+                                column_header = identity.safe_filename_base
+                            
+                                if column_header in name:
+                                    items_measurements.append((column_header, values, mask_name, img_name))
+                                    found = True
+                                    break
+                            if found: break
+                    
+                if items_measurements:
+                    histogram_plots.create_mask_separated_histograms(
+                        items_measurements, output_path=path, show_kde=True, probe_colors=self.probe_colors
+                    )
+                    QMessageBox.information(self, "Save PNG", f"Combined high-quality histogram saved to {path}")
 
     def _export_selected_graphs(self):
         if not self.working_dir: return
@@ -1127,8 +1198,8 @@ class MainWindow(QMainWindow):
                 if mask_name in name:
                     for img_name, values in measurements.items():
                         # Use the new naming convention to match the graph name
-                        from export_plot_utils import get_safe_histogram_name
-                        column_header = get_safe_histogram_name(img_name, mask_name)
+                        identity = build_histogram_identity(img_name, mask_name)
+                        column_header = identity.safe_filename_base
                         
                         if column_header in name:
                             items_measurements.append((column_header, values))
@@ -1216,23 +1287,16 @@ class MainWindow(QMainWindow):
             source_images_info = []
             if image_names:
                 for img_name in image_names:
-                    parts = img_name.split('_')
-                    if len(parts) >= 6:
-                        # <Sample>_<Slide ##>_<Owner Initials>_<ObjectiveMag>_<Well Position>_<Probe>
-                        # Indices: 0, 1, 2, 3, 4, 5
-                        # Strip extension from the last part
-                        probe = os.path.splitext(parts[5])[0]
-                        source_images_info.append(f"{parts[4]}_{probe}")
-                    else:
-                        source_images_info.append(img_name)
+                    identity = parse_image_identity(img_name)
+                    source_images_info.append(identity.well_probe_key)
 
             # Get project JSON path
             image_list = self.asset_manager.get_image_list()
             project_name = "project_"
             if image_list:
-                parts = image_list[0].split('_')
-                if len(parts) >= 2:
-                    project_name = f"{parts[0]}_{parts[1]}_"
+                identity = parse_image_identity(image_list[0])
+                if identity.sample and identity.slide:
+                    project_name = f"{identity.sample}_{identity.slide}_"
             
             json_dir = os.path.join(self.working_dir, "JSON")
             project_json_path = os.path.join(json_dir, f"{project_name}.json")
@@ -1249,7 +1313,7 @@ class MainWindow(QMainWindow):
                 project_data["Masks"] = {}
 
             for i, mask in enumerate(individual_masks):
-                new_mask_name = f"{mask_root_name}_{i+1:02d}.png"
+                new_mask_name = f"{mask_root_name}{i+1:02d}.png"
                 # Save mask as 8-bit PNG
                 mask_to_save = mask.astype(np.uint8)
                 cv2.imwrite(os.path.join(mask_dir, new_mask_name), mask_to_save)
@@ -1574,9 +1638,9 @@ class MainWindow(QMainWindow):
 
                 # Find a unique name for the threshold mask
                 idx = 1
-                while os.path.exists(os.path.join(mask_dir, f"ThresholdMask_{idx}.png")):
+                while os.path.exists(os.path.join(mask_dir, f"ThresholdMask{idx}.png")):
                     idx += 1
-                mask_name = f"ThresholdMask_{idx}.png"
+                mask_name = f"ThresholdMask{idx}.png"
                 cv2.imwrite(os.path.join(mask_dir, mask_name), binary_mask.astype(np.uint8))
 
                 self.statusBar().showMessage(f"Threshold mask {mask_name} created.", 3000)
@@ -1725,7 +1789,7 @@ class MainWindow(QMainWindow):
                         base_name = os.path.splitext(existing_mask_name)[0]
                         counter = 1
                         while True:
-                            mask_name = f"{base_name}_v{counter}.png"
+                            mask_name = f"{base_name}v{counter}.png"
                             mask_path = os.path.join(mask_dir, mask_name)
                             if not os.path.exists(mask_path):
                                 break
@@ -1736,7 +1800,7 @@ class MainWindow(QMainWindow):
                     # Find a unique name
                     counter = 1
                     while True:
-                        mask_name = f"{base_name}_paint_{counter}.png"
+                        mask_name = f"{base_name}paint{counter}.png"
                         mask_path = os.path.join(mask_dir, mask_name)
                         if not os.path.exists(mask_path):
                             break
@@ -1781,7 +1845,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Properties Table", f"Error extracting properties: {str(e)}")
 
     def _mask_clicked(self, item):
-        mask_name = item.text()
+        mask_name = item.data(Qt.UserRole)
         if mask_name in self.visible_masks:
             self.visible_masks.remove(mask_name)
         else:
@@ -1804,7 +1868,7 @@ class MainWindow(QMainWindow):
     def _show_mask_context_menu(self, position):
         item = self.mask_list.itemAt(position)
         if not item: return
-        name = item.text()
+        name = item.data(Qt.UserRole)
         
         menu = QMenu()
         
@@ -1842,7 +1906,7 @@ class MainWindow(QMainWindow):
     def _rename_item(self, item, subfolder, list_widget):
         if not self.working_dir: return
         
-        old_name = item.text()
+        old_name = item.data(Qt.UserRole) if subfolder == "Cluster Masks" else item.text()
         base_name, extension = os.path.splitext(old_name)
         
         new_name, ok = QInputDialog.getText(self, "Rename Item", "Enter new name:", QLineEdit.Normal, base_name)
@@ -2378,7 +2442,7 @@ class MainWindow(QMainWindow):
     def _select_all_masks(self):
         for i in range(self.mask_list.count()):
             item = self.mask_list.item(i)
-            self.visible_masks.add(item.text())
+            self.visible_masks.add(item.data(Qt.UserRole))
             item.setSelected(True)
         self.cached_composite = None
         self._refresh_viewer()
@@ -2395,7 +2459,7 @@ class MainWindow(QMainWindow):
         if QMessageBox.question(self, "Delete", f"Delete {len(selected)} cluster masks?", QMessageBox.Yes|QMessageBox.No) == QMessageBox.Yes:
             mask_dir = os.path.join(self.working_dir, "Cluster Masks")
             for item in selected:
-                name = item.text()
+                name = item.data(Qt.UserRole)
 
                 # Move to deleted assets in JSON
                 self.asset_manager.delete_mask(name)
@@ -2462,7 +2526,7 @@ class MainWindow(QMainWindow):
             masks_to_merge = []
             source_masks = []
             for item in selected_items:
-                mask_name = item.text()
+                mask_name = item.data(Qt.UserRole)
                 source_masks.append(mask_name)
                 mask_asset = self.asset_manager.get_mask_by_name(mask_name)
                 if mask_asset:
@@ -2481,9 +2545,9 @@ class MainWindow(QMainWindow):
                 image_list = self.asset_manager.get_image_list()
                 project_name = "project_"
                 if image_list:
-                    parts = image_list[0].split('_')
-                    if len(parts) >= 2:
-                        project_name = f"{parts[0]}_{parts[1]}_"
+                    identity = parse_image_identity(image_list[0])
+                    if identity.sample and identity.slide:
+                        project_name = f"{identity.sample}_{identity.slide}_"
                 
                 json_dir = os.path.join(self.working_dir, "JSON")
                 project_json_path = os.path.join(json_dir, f"{project_name}.json")
@@ -2535,10 +2599,13 @@ class MainWindow(QMainWindow):
             return QColor(int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255))
         else:
             try:
-                if mask_name.startswith("KC_"):
-                    idx = int(mask_name.split('_')[1].split('.')[0])
-                elif mask_name.startswith("ThresholdMask_"):
-                    idx = int(mask_name.split('_')[1].split('.')[0]) + 100
+                import re
+                if mask_name.startswith("KC"):
+                    match = re.search(r'KC(\d+)', mask_name)
+                    idx = int(match.group(1)) if match else hash(mask_name)
+                elif mask_name.startswith("ThresholdMask"):
+                    match = re.search(r'ThresholdMask(\d+)', mask_name)
+                    idx = (int(match.group(1)) if match else hash(mask_name)) + 100
                 else:
                     idx = hash(mask_name)
             except:

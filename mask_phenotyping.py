@@ -9,8 +9,9 @@ import histogram_plots
 import export_plot_utils
 import json
 import scipy.stats
+from naming_utils import parse_image_identity, build_histogram_identity, strip_extension
 
-def phenotype_masks(asset_manager, mask_names, output_dir, tissue_mask_name, tissue_type, image_names=None, normalization_type="None", project_name=None):
+def phenotype_masks(asset_manager, mask_names, output_dir, tissue_mask_name, tissue_type, image_names=None, normalization_type="None", project_name=None, color_palette=None):
     """
     Perform phenotyping on selected masks and output a condensed feature vector for each mask.
     
@@ -336,7 +337,8 @@ def phenotype_masks(asset_manager, mask_names, output_dir, tissue_mask_name, tis
                 hist_files = histogram_plots.create_histograms(
                     measurements, mask_name, graph_dir,
                     source_masks=source_masks, show_kde=True,
-                    normalization=normalization_type
+                    normalization=normalization_type,
+                    color_palette=color_palette
                 )
                 export_plot_utils.save_measurements_json(measurements, mask_name, graph_dir)
                 export_plot_utils.save_group_csv(measurements, mask_name, graph_dir)
@@ -350,8 +352,8 @@ def phenotype_masks(asset_manager, mask_names, output_dir, tissue_mask_name, tis
                     hist_path = os.path.join(graph_dir, hist_file)
                     # Find corresponding image
                     for img_name, values in measurements.items():
-                        from export_plot_utils import get_safe_histogram_name
-                        expected_name = f"{get_safe_histogram_name(img_name, mask_name)}.png"
+                        identity = build_histogram_identity(img_name, mask_name)
+                        expected_name = f"{identity.safe_filename_base}.png"
                         if hist_file == expected_name:
                             # Calculate stats for project JSON
                             v = np.array(values)
@@ -371,11 +373,11 @@ def phenotype_masks(asset_manager, mask_names, output_dir, tissue_mask_name, tis
                                     "entropy": float(scipy.stats.differential_entropy(v)) if v.size > 1 else 0.0
                                 }
                             
-                            sample_name, slide_number, well_position, probe_name = "Unknown", "Unknown", "Unknown", "Unknown"
-                            parts = img_name.split('_')
-                            if len(parts) >= 6:
-                                sample_name, slide_number, well_position = parts[0], parts[1], parts[4]
-                                probe_name = os.path.splitext(parts[5])[0]
+                            img_identity = identity.image
+                            sample_name = img_identity.sample or "Unknown"
+                            slide_number = img_identity.slide or "Unknown"
+                            well_position = img_identity.well_position or "Unknown"
+                            probe_name = img_identity.probe or "Unknown"
                             
                             project_data["Histograms"][hist_file] = {
                                 "name": hist_file,
@@ -387,8 +389,8 @@ def phenotype_masks(asset_manager, mask_names, output_dir, tissue_mask_name, tis
                                 "linked_mask": mask_name,
                                 "cluster_method": cluster_method,
                                 "normalization": normalization_type,
-                                "histograms_json": os.path.abspath(os.path.join(graph_dir, f"Histograms_{mask_name}.json")),
-                                "histograms_csv": os.path.abspath(os.path.join(graph_dir, f"Histograms_{mask_name}.csv")),
+                                "histograms_json": os.path.abspath(os.path.join(graph_dir, f"Histograms_{strip_extension(mask_name)}.json")),
+                                "histograms_csv": os.path.abspath(os.path.join(graph_dir, f"Histograms_{strip_extension(mask_name)}.csv")),
                                 **stats_dict
                             }
                             break

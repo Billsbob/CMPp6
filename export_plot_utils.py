@@ -3,6 +3,7 @@ import json
 import numpy as np
 import pandas as pd
 import shutil
+from naming_utils import build_histogram_identity, sanitize_name, strip_extension
 
 def save_measurements_json(measurements, mask_name, output_dir):
     """
@@ -17,10 +18,8 @@ def save_measurements_json(measurements, mask_name, output_dir):
         str: Path to the saved JSON file.
     """
     os.makedirs(output_dir, exist_ok=True)
-    # Strip extension from mask name if present
-    mask_name = os.path.splitext(mask_name)[0]
     
-    safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in mask_name])
+    safe_mask_name = sanitize_name(strip_extension(mask_name))
     json_filename = f"Histograms_{safe_mask_name}.json"
     json_path = os.path.join(output_dir, json_filename)
     
@@ -34,24 +33,8 @@ def get_safe_histogram_name(image_name, mask_name):
     Generate a name following the convention <Mask Name>_<Well Position>_<Probe>
     based on the image name and mask name.
     """
-    # Clean up image_name (strip extension)
-    image_name = os.path.splitext(image_name)[0]
-    safe_image_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in image_name])
-    
-    # Strip extension from mask name if present
-    temp_mask_name = os.path.splitext(mask_name)[0]
-    safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in temp_mask_name])
-    
-    # Image name format: <Sample>_<Slide ##>_<Owner Initials>_<ObjectiveMag>_<Well Position>_<Probe>
-    parts = safe_image_name.split('_')
-    if len(parts) >= 6:
-        sample = parts[0]
-        slide = parts[1]
-        well_position = parts[4]
-        probe = parts[5]
-        return f"{sample}_{slide}_{safe_mask_name}_{well_position}_{probe}"
-    else:
-        return f"{safe_mask_name}_{safe_image_name}"
+    identity = build_histogram_identity(image_name, mask_name)
+    return identity.safe_filename_base
 
 def save_group_csv(measurements, mask_name, output_dir):
     """
@@ -67,10 +50,8 @@ def save_group_csv(measurements, mask_name, output_dir):
         str: Path to the saved CSV file.
     """
     os.makedirs(output_dir, exist_ok=True)
-    # Strip extension from mask name if present
-    mask_name = os.path.splitext(mask_name)[0]
     
-    safe_mask_name = "".join([c if c.isalnum() or c in (' ', '.', '_', '-') else '_' for c in mask_name])
+    safe_mask_name = sanitize_name(strip_extension(mask_name))
     csv_filename = f"Histograms_{safe_mask_name}.csv"
     csv_path = os.path.join(output_dir, csv_filename)
     
