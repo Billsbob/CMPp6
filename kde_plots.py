@@ -17,7 +17,7 @@ def truncate_image_name(name):
         return f"{parts[-2]}_{parts[-1]}"
     return identity.base_name
 
-def create_joint_kde_plot(all_measurements, output_dir, user_filename=None, normalization=None):
+def create_joint_kde_plot(all_measurements, output_dir, user_filename=None, normalization=None, probe_colors=None):
     """
     Create a Joint KDE plot (Jointplot) for up to 3 sets of images under masks.
     
@@ -31,6 +31,7 @@ def create_joint_kde_plot(all_measurements, output_dir, user_filename=None, norm
         output_dir (str): Directory to save the plot image.
         user_filename (str, optional): Custom filename for the plot.
         normalization (str, optional): Type of normalization applied.
+        probe_colors (dict, optional): Mapping of probe name to color.
         
     Returns:
         str: Filename of the generated jointplot.
@@ -67,7 +68,8 @@ def create_joint_kde_plot(all_measurements, output_dir, user_filename=None, norm
 
     plt.figure(figsize=(12, 12))
     # We use a color palette for multiple sets
-    palette = sns.color_palette("husl", len(all_measurements))
+    palette_name = probe_colors.get("__palette__", "husl") if probe_colors else "husl"
+    palette = sns.color_palette(palette_name, len(all_measurements))
     
     # Create the JointGrid
     g = sns.JointGrid()
@@ -77,11 +79,25 @@ def create_joint_kde_plot(all_measurements, output_dir, user_filename=None, norm
         y = m['y_values']
         label = descriptions[i]
         
+        # Determine color for this set. 
+        # Since it's a joint plot of two images, we might use the probe color of one of them 
+        # if they are both the same probe, or just fall back to the palette.
+        color = palette[i]
+        if probe_colors:
+            id1 = parse_image_identity(m['image1_name'])
+            id2 = parse_image_identity(m['image2_name'])
+            # If both images have the same probe color, use it. 
+            # Otherwise use the palette color for the set.
+            c1 = probe_colors.get(id1.probe or id1.base_name)
+            c2 = probe_colors.get(id2.probe or id2.base_name)
+            if c1 and c1 == c2:
+                color = c1
+
         # Plot KDE in the joint area
-        sns.kdeplot(x=x, y=y, ax=g.ax_joint, fill=True, color=palette[i], label=label, alpha=0.5)
+        sns.kdeplot(x=x, y=y, ax=g.ax_joint, fill=True, color=color, label=label, alpha=0.5)
         # Plot KDE in the marginal areas
-        sns.kdeplot(x=x, ax=g.ax_marg_x, color=palette[i], fill=True)
-        sns.kdeplot(y=y, ax=g.ax_marg_y, color=palette[i], fill=True)
+        sns.kdeplot(x=x, ax=g.ax_marg_x, color=color, fill=True)
+        sns.kdeplot(y=y, ax=g.ax_marg_y, color=color, fill=True)
 
     # Use the JointGrid's figure to add the legend below
     handles, labels = g.ax_joint.get_legend_handles_labels()

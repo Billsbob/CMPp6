@@ -40,7 +40,7 @@ class HistogramIdentity:
 
     @property
     def color_key(self) -> str:
-        return self.image.well_probe_key
+        return self.image.probe or self.image.base_name
 
     @property
     def safe_filename_base(self) -> str:
@@ -96,7 +96,7 @@ def parse_image_identity(image_name: str) -> ImageIdentity:
             owner=parts[2],
             objective=parts[3],
             well_position=parts[4],
-            probe=parts[5],
+            probe="_".join(parts[5:]),
         )
 
     return ImageIdentity(

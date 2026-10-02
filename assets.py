@@ -354,7 +354,7 @@ class AssetManager:
         with open(project_json_path, 'w') as f:
             json.dump(project_data, f, indent=4)
 
-    def update_project_json(self):
+    def update_project_json(self, probe_colors=None):
         if not self.working_dir:
             return
 
@@ -373,6 +373,12 @@ class AssetManager:
                     project_data = json.load(f)
             except:
                 project_data = {}
+
+        # Update Probe Colors if provided
+        if probe_colors is not None:
+            project_data["Probe Colors"] = probe_colors
+        elif "Probe Colors" not in project_data:
+            project_data["Probe Colors"] = {}
 
         # Preserve Deleted Assets
         deleted_assets = project_data.get("Deleted Assets", [])

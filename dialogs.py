@@ -632,7 +632,7 @@ class ProbeColorRuleDialog(QDialog):
     def __init__(self, probe_names, initial_colors=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Set Color Rules for Probes")
-        self.resize(400, 500)
+        self.resize(450, 550)
         self.probe_names = sorted(list(set(probe_names)))
         self.colors = initial_colors.copy() if initial_colors else {}
         self.color_buttons = {}
@@ -640,6 +640,28 @@ class ProbeColorRuleDialog(QDialog):
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
+        
+        # Palette Selection at the top
+        palette_layout = QHBoxLayout()
+        palette_layout.addWidget(QLabel("Default Palette:"))
+        self.palette_combo = QComboBox()
+        # Common Seaborn palettes
+        palettes = ["husl", "viridis", "magma", "inferno", "plasma", "rocket", "mako", "flare", "crest", "Set1", "Set2", "tab10", "hls"]
+        self.palette_combo.addItems(palettes)
+        
+        current_palette = self.colors.get("__palette__", "husl")
+        idx = self.palette_combo.findText(current_palette)
+        if idx >= 0:
+            self.palette_combo.setCurrentIndex(idx)
+        
+        palette_layout.addWidget(self.palette_combo)
+        
+        apply_palette_btn = QPushButton("Apply to All")
+        apply_palette_btn.clicked.connect(self._apply_palette_to_all)
+        palette_layout.addWidget(apply_palette_btn)
+        
+        layout.addLayout(palette_layout)
+        layout.addWidget(QLabel("<i>Individual colors override the default palette.</i>"))
         
         from PySide6.QtWidgets import QScrollArea
         scroll = QScrollArea()
@@ -658,9 +680,14 @@ class ProbeColorRuleDialog(QDialog):
             self._update_button_color(btn, color)
             btn.clicked.connect(lambda checked=False, p=probe, b=btn: self._pick_color(p, b))
             
+            clear_btn = QPushButton("Clear")
+            clear_btn.setFixedWidth(50)
+            clear_btn.clicked.connect(lambda checked=False, p=probe, b=btn: self._clear_color(p, b))
+
             h_layout.addWidget(label)
             h_layout.addStretch()
             h_layout.addWidget(btn)
+            h_layout.addWidget(clear_btn)
             scroll_layout.addLayout(h_layout)
             self.color_buttons[probe] = btn
             
@@ -672,9 +699,32 @@ class ProbeColorRuleDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def _apply_palette_to_all(self):
+        import seaborn as sns
+        palette_name = self.palette_combo.currentText()
+        try:
+            palette = sns.color_palette(palette_name, len(self.probe_names))
+            for i, probe in enumerate(self.probe_names):
+                rgb = palette[i]
+                hex_color = QColor.fromRgbF(rgb[0], rgb[1], rgb[2]).name()
+                self.colors[probe] = hex_color
+                self._update_button_color(self.color_buttons[probe], hex_color)
+        except Exception as e:
+            QMessageBox.critical(self, "Palette Error", f"Could not apply palette: {str(e)}")
+
+    def _clear_color(self, probe, button):
+        if probe in self.colors:
+            del self.colors[probe]
+        self._update_button_color(button, "#ffffff")
+
     def _update_button_color(self, button, color_hex):
         pixmap = QPixmap(30, 20)
-        pixmap.fill(QColor(color_hex))
+        # Handle cases where color might be invalid
+        try:
+            c = QColor(color_hex)
+        except:
+            c = QColor("#ffffff")
+        pixmap.fill(c)
         button.setIcon(pixmap)
         button.setIconSize(QSize(30, 20))
 
@@ -687,6 +737,7 @@ class ProbeColorRuleDialog(QDialog):
             self._update_button_color(button, hex_color)
 
     def get_colors(self):
+        self.colors["__palette__"] = self.palette_combo.currentText()
         return self.colors
 
 class MetadataAssignmentDialog(QDialog):

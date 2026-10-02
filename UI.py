@@ -377,6 +377,19 @@ class MainWindow(QMainWindow):
 
     def _load_working_directory(self, directory):
         self.working_dir = directory
+        
+        # Load probe colors from project JSON if available
+        project_json_path = self.asset_manager.get_project_json_path()
+        if project_json_path and os.path.exists(project_json_path):
+            try:
+                with open(project_json_path, 'r') as f:
+                    project_data = json.load(f)
+                    self.probe_colors = project_data.get("Probe Colors", {})
+            except:
+                self.probe_colors = {}
+        else:
+            self.probe_colors = {}
+
         self.asset_manager.set_working_dir(directory)
         
         # Save to settings
@@ -807,7 +820,10 @@ class MainWindow(QMainWindow):
                     return
 
                 graph_dir = os.path.join(self.working_dir, "Graphs")
-                filename = kde_plots.create_joint_kde_plot(all_measurements, graph_dir, user_filename=user_filename, normalization=item)
+                filename = kde_plots.create_joint_kde_plot(
+                    all_measurements, graph_dir, user_filename=user_filename, 
+                    normalization=item, probe_colors=self.probe_colors
+                )
 
                 if filename:
                     self.statusBar().showMessage("Joint KDE Plot completed.", 3000)
@@ -924,6 +940,8 @@ class MainWindow(QMainWindow):
         dialog = ProbeColorRuleDialog(list(probe_names), initial_colors=self.probe_colors, parent=self)
         if dialog.exec():
             self.probe_colors = dialog.get_colors()
+            # Save colors to project JSON
+            self.asset_manager.update_project_json(probe_colors=self.probe_colors)
             # Refresh graphs window if it's open
             if self.graphs_window and self.graphs_window.isVisible():
                 self._show_graphs_window()
@@ -942,6 +960,11 @@ class MainWindow(QMainWindow):
             self.color_rules_btn = QPushButton("Set Color Rules")
             self.color_rules_btn.clicked.connect(self._open_color_rules_dialog)
             toolbar.addWidget(self.color_rules_btn)
+            
+            self.regen_hist_btn = QPushButton("Regenerate Histogram PNGs")
+            self.regen_hist_btn.clicked.connect(self._regenerate_all_histograms)
+            toolbar.addWidget(self.regen_hist_btn)
+            
             toolbar.addStretch()
             main_v_layout.addLayout(toolbar)
 
@@ -971,10 +994,47 @@ class MainWindow(QMainWindow):
         graph_dir = os.path.join(self.working_dir, "Graphs")
         show_kde = self.kde_checkbox.isChecked()
         
+        # Determine if we should redraw from JSON (when KDE is requested and JSON exists)
+        redraw_from_json = show_kde
+        
         if len(selected_graphs) == 1:
-            # Single graph - show the pre-rendered image
-            graph_path = os.path.join(graph_dir, selected_graphs[0].text())
-            if os.path.exists(graph_path):
+            # Single graph - show the pre-rendered image OR redraw from JSON
+            graph_filename = selected_graphs[0].text()
+            graph_path = os.path.join(graph_dir, graph_filename)
+            
+            combined_rgb = None
+            if redraw_from_json and not graph_filename.startswith("JointPlot_"):
+                # Try to find corresponding raw data in JSON files
+                items_to_render = []
+                if os.path.exists(graph_dir):
+                    for f in os.listdir(graph_dir):
+                        if f.startswith("Histograms_") and f.endswith(".json"):
+                            mask_name_from_json = f[len("Histograms_"):-len(".json")]
+                            try:
+                                with open(os.path.join(graph_dir, f), 'r') as jf:
+                                    measurements = json.load(jf)
+                                    for img_name, values in measurements.items():
+                                        from export_plot_utils import get_safe_histogram_name
+                                        column_header = get_safe_histogram_name(img_name, mask_name_from_json)
+                                        if column_header in graph_filename:
+                                            items_to_render.append((f"{img_name} ({mask_name_from_json})", values, mask_name_from_json, img_name))
+                                            break
+                            except: pass
+                            if items_to_render: break
+                
+                if items_to_render:
+                    combined_rgb = histogram_plots.create_mask_separated_histograms(
+                        items_to_render, show_kde=True, probe_colors=self.probe_colors
+                    )
+
+            if combined_rgb is not None:
+                combined_rgb = np.ascontiguousarray(combined_rgb)
+                h, w, _ = combined_rgb.shape
+                qimg = QImage(combined_rgb.data, w, h, combined_rgb.strides[0], QImage.Format_RGB888)
+                label = QLabel()
+                label.setPixmap(QPixmap.fromImage(qimg))
+                self.graphs_layout.addWidget(label)
+            elif os.path.exists(graph_path):
                 label = QLabel()
                 pixmap = QPixmap(graph_path)
                 label.setPixmap(pixmap)
@@ -1070,10 +1130,18 @@ class MainWindow(QMainWindow):
                             source_masks = project_data.get("Masks", {}).get(mask_name, {}).get("source_masks")
                             if name_no_ext in df.columns:
                                 counts = df[name_no_ext].values
-                                # We need image name for formatting legend. 
-                                # In CSV headers, it is get_safe_histogram_name(img_name, mask_name)
-                                # We might need to reverse engineer it or just use the header.
-                                items_to_render.append((name_no_ext, counts, mask_name, name_no_ext))
+                                
+                                # Find original image name from metadata JSON if possible
+                                original_img_name = name_no_ext
+                                json_meta_path = os.path.join(graph_dir, name_no_ext + ".json")
+                                if os.path.exists(json_meta_path):
+                                    try:
+                                        with open(json_meta_path, 'r') as mf:
+                                            meta = json.load(mf)
+                                            original_img_name = meta.get("image_name", name_no_ext)
+                                    except: pass
+
+                                items_to_render.append((name_no_ext, counts, mask_name, original_img_name))
                                 found = True
                         if found: break
                 
@@ -1245,6 +1313,79 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Export CSV", f"Histogram data exported to {path}")
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"An error occurred: {str(e)}")
+
+    def _regenerate_all_histograms(self):
+        if not self.working_dir: return
+        
+        graph_dir = os.path.join(self.working_dir, "Graphs")
+        if not os.path.exists(graph_dir): return
+        
+        reply = QMessageBox.question(self, "Regenerate Histograms", 
+                                     "This will redraw all individual histogram PNGs on disk using the current color rules. Proceed?",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.No: return
+        
+        try:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            
+            # Find project JSON to get normalization info
+            image_list = self.asset_manager.get_image_list()
+            project_name = "project_"
+            if image_list:
+                identity = parse_image_identity(image_list[0])
+                if identity.sample and identity.slide:
+                    project_name = f"{identity.sample}_{identity.slide}_"
+            
+            json_dir = os.path.join(self.working_dir, "JSON")
+            project_json_path = os.path.join(json_dir, f"{project_name}.json")
+            
+            project_data = {}
+            if os.path.exists(project_json_path):
+                try:
+                    with open(project_json_path, 'r') as f:
+                        project_data = json.load(f)
+                except: pass
+            
+            # Iterate through all Histograms_*.json files in Graphs dir
+            for f in os.listdir(graph_dir):
+                if f.startswith("Histograms_") and f.endswith(".json"):
+                    mask_name = f[len("Histograms_"):-len(".json")]
+                    # We need the real mask name (with extension if possible)
+                    # Let's try to find it in project_data["Masks"]
+                    real_mask_name = mask_name
+                    for m_name in project_data.get("Masks", {}).keys():
+                        if strip_extension(m_name) == mask_name:
+                            real_mask_name = m_name
+                            break
+                    
+                    try:
+                        with open(os.path.join(graph_dir, f), 'r') as jf:
+                            measurements = json.load(jf)
+                        
+                        if not measurements: continue
+                        
+                        mask_metadata = project_data.get("Masks", {}).get(real_mask_name, {})
+                        source_masks = mask_metadata.get("source_masks")
+                        
+                        # Find normalization type from one of the histograms in project_data
+                        norm_type = "None"
+                        for h_info in project_data.get("Histograms", {}).values():
+                            if h_info.get("linked_mask") == real_mask_name:
+                                norm_type = h_info.get("normalization", "None")
+                                break
+                        
+                        histogram_plots.create_histograms(
+                            measurements, real_mask_name, graph_dir,
+                            source_masks=source_masks, show_kde=True,
+                            normalization=norm_type, color_palette=self.probe_colors
+                        )
+                    except Exception as e:
+                        print(f"Failed to regenerate for {f}: {e}")
+            
+            self.statusBar().showMessage("All histograms regenerated with new colors.", 3000)
+            self._show_graphs_window()
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def _graph_clicked(self, item):
         self._show_graphs_window()

@@ -16,8 +16,8 @@ def create_histograms(measurements, mask_name, output_dir, source_masks=None, sh
         source_masks (list, optional): List of source masks if the mask is a merged one.
         show_kde (bool): Whether to show KDE in the PNG.
         normalization (str, optional): Type of normalization applied.
-        color_palette (dict, optional): Maps '<well_position>_<probe>' to a color string.
-            Example: {'3_DAPI': '#377eb8', '7_GFP': '#4daf4a'}
+        color_palette (dict, optional): Maps '<probe>' to a color string.
+            Example: {'DAPI': '#377eb8', 'GFP': '#4daf4a'}
         
     Returns:
         list of str: List of filenames of the generated histograms.
@@ -76,7 +76,7 @@ def create_histograms(measurements, mask_name, output_dir, source_masks=None, sh
         
     return generated_files
 
-def create_overlaid_histogram(measurements, mask_name, output_dir, source_masks=None):
+def create_overlaid_histogram(measurements, mask_name, output_dir, source_masks=None, color_palette=None):
     """
     Create one histogram with all measurements overlaid as different series.
     Adjust Y-axis to the maximum value of all histograms.
@@ -86,6 +86,7 @@ def create_overlaid_histogram(measurements, mask_name, output_dir, source_masks=
         mask_name (str): Name of the mask used.
         output_dir (str): Directory to save the histogram image.
         source_masks (list, optional): List of source masks if the mask is a merged one.
+        color_palette (dict, optional): Maps '<probe>' to a color string.
         
     Returns:
         str: Filename of the generated overlaid histogram.
@@ -98,7 +99,8 @@ def create_overlaid_histogram(measurements, mask_name, output_dir, source_masks=
     plt.figure(figsize=(10, 6))
     
     # Use a color palette for multiple images
-    palette = sns.color_palette("husl", len(measurements))
+    palette_name = color_palette.get("__palette__", "husl") if color_palette else "husl"
+    palette = sns.color_palette(palette_name, len(measurements))
     
     max_freq = 0
     
@@ -107,13 +109,28 @@ def create_overlaid_histogram(measurements, mask_name, output_dir, source_masks=
             continue
         
         identity = build_histogram_identity(image_name, mask_name)
-        ax = sns.histplot(values, kde=True, label=identity.image.base_name, color=palette[i], element="step", stat="density")
+        
+        # Determine color
+        color = palette[i]
+        if color_palette:
+            color = color_palette.get(identity.color_key, color)
+
+        ax = sns.histplot(values, kde=True, label=identity.image.base_name, color=color, element="step", stat="density")
+        
+        # Update max_freq for Y-axis scaling
+        for child in ax.get_children():
+            if isinstance(child, plt.Polygon): # Histograms are often Polygons
+                verts = child.get_path().vertices
+                if len(verts) > 0:
+                    max_freq = max(max_freq, np.max(verts[:, 1]))
+            elif hasattr(child, 'get_ydata'): # KDE or other lines
+                max_freq = max(max_freq, np.max(child.get_ydata()))
         
         # Add mean and median lines
         mean_val = np.mean(values)
         median_val = np.median(values)
-        ax.axvline(mean_val, color=palette[i], linestyle='--', alpha=0.3)
-        ax.axvline(median_val, color=palette[i], linestyle='-', alpha=0.3)
+        ax.axvline(mean_val, color=color, linestyle='--', alpha=0.3)
+        ax.axvline(median_val, color=color, linestyle='-', alpha=0.3)
 
     # Strip extension from mask name for title
     mask_display_name = strip_extension(mask_name)
@@ -126,7 +143,8 @@ def create_overlaid_histogram(measurements, mask_name, output_dir, source_masks=
     plt.legend(title="Images")
     
     # Seaborn's histplot auto-scales Y, but let's ensure it's at least max_freq
-    plt.ylim(0, max_freq * 1.1) # Add some margin
+    if max_freq > 0:
+        plt.ylim(0, max_freq * 1.1) # Add some margin
 
     # Strip extension from mask name for filename
     safe_mask_name = sanitize_name(strip_extension(mask_name))
@@ -137,16 +155,17 @@ def create_overlaid_histogram(measurements, mask_name, output_dir, source_masks=
     
     return hist_filename
 
-def create_dynamic_overlaid_histogram(items_measurements, title="Combined Histograms", output_path=None, source_masks=None, show_kde=True):
+def create_dynamic_overlaid_histogram(items_measurements, title="Combined Histograms", output_path=None, source_masks=None, show_kde=True, probe_colors=None):
     """
-    Create a high-quality histogram overlay from a list of (label, values) tuples.
+    Create a high-quality histogram overlay from a list of (label, values, mask_name, original_image_name) tuples.
     
     Args:
-        items_measurements (list of tuples): List of (label, values) to plot.
+        items_measurements (list of tuples): List of (label, values, mask_name, original_image_name) to plot.
         title (str): Plot title.
         output_path (str, optional): If provided, save the plot to this path.
         source_masks (list, optional): List of source masks if applicable.
         show_kde (bool): Whether to show KDE.
+        probe_colors (dict, optional): Mapping of probe name to color.
         
     Returns:
         np.ndarray: The plot as an RGB image array.
@@ -155,20 +174,36 @@ def create_dynamic_overlaid_histogram(items_measurements, title="Combined Histog
         return None
         
     plt.figure(figsize=(10, 6))
-    palette = sns.color_palette("husl", len(items_measurements))
+    palette_name = probe_colors.get("__palette__", "husl") if probe_colors else "husl"
+    palette = sns.color_palette(palette_name, len(items_measurements))
     
     max_freq = 0
-    for i, (label, values) in enumerate(items_measurements):
+    for i, (label, values, mask_name, img_name) in enumerate(items_measurements):
         if len(values) == 0:
             continue
             
-        ax = sns.histplot(values, kde=show_kde, label=label, color=palette[i], element="step", stat="density")
+        # Determine color
+        identity = build_histogram_identity(img_name, mask_name)
+        color = palette[i]
+        if probe_colors:
+            color = probe_colors.get(identity.color_key, color)
+
+        ax = sns.histplot(values, kde=show_kde, label=label, color=color, element="step", stat="density")
         
+        # Update max_freq for Y-axis scaling
+        for child in ax.get_children():
+            if isinstance(child, plt.Polygon):
+                verts = child.get_path().vertices
+                if len(verts) > 0:
+                    max_freq = max(max_freq, np.max(verts[:, 1]))
+            elif hasattr(child, 'get_ydata'):
+                max_freq = max(max_freq, np.max(child.get_ydata()))
+
         # Add mean and median lines
         mean_val = np.mean(values)
         median_val = np.median(values)
-        ax.axvline(mean_val, color=palette[i], linestyle='--', alpha=0.3)
-        ax.axvline(median_val, color=palette[i], linestyle='-', alpha=0.3)
+        ax.axvline(mean_val, color=color, linestyle='--', alpha=0.3)
+        ax.axvline(median_val, color=color, linestyle='-', alpha=0.3)
             
     if source_masks:
         title += f"\n(Sources: {', '.join(source_masks)})"
@@ -205,15 +240,16 @@ def create_dynamic_overlaid_histogram(items_measurements, title="Combined Histog
 
     return rgb
 
-def render_fast_overlay(items_counts, title="Combined Histograms (Fast Preview)", source_masks=None):
+def render_fast_overlay(items_counts, title="Combined Histograms (Fast Preview)", source_masks=None, probe_colors=None):
     """
     Render a fast overlay using pre-calculated binned data (counts).
     
     Args:
-        items_counts (list of tuples): List of (label, counts) to plot. 
+        items_counts (list of tuples): List of (label, counts, mask_name, original_image_name) to plot. 
                                       Counts should be an array of size 256.
         title (str): Plot title.
         source_masks (list, optional): List of source masks if applicable.
+        probe_colors (dict, optional): Mapping of probe name to color.
         
     Returns:
         np.ndarray: The plot as an RGB image array.
@@ -226,17 +262,27 @@ def render_fast_overlay(items_counts, title="Combined Histograms (Fast Preview)"
     
     x = np.arange(256)
     
+    # Use a color palette for multiple images
+    palette_name = probe_colors.get("__palette__", "husl") if probe_colors else "husl"
+    palette = sns.color_palette(palette_name, len(items_counts))
+    
     max_val = 0
-    for label, counts in items_counts:
+    for i, (label, counts, mask_name, img_name) in enumerate(items_counts):
         if len(counts) == 0:
             continue
         
+        # Determine color
+        identity = build_histogram_identity(img_name, mask_name)
+        color = palette[i]
+        if probe_colors:
+            color = probe_colors.get(identity.color_key, color)
+
         # Normalize counts to density
         bin_width = 1.0 # Assuming 0-255 range with 256 bins
         total = np.sum(counts)
         density = counts / (total * bin_width) if total > 0 else counts
         
-        ax.step(x, density, label=label, where='mid', alpha=0.7)
+        ax.step(x, density, label=label, where='mid', alpha=0.7, color=color)
         max_val = max(max_val, np.max(density))
         
         # Estimate mean/median from binned data
@@ -244,8 +290,6 @@ def render_fast_overlay(items_counts, title="Combined Histograms (Fast Preview)"
         cumulative = np.cumsum(counts)
         median_est = np.searchsorted(cumulative, total / 2.0)
         
-        line = ax.step(x, density, where='mid', alpha=0.0)[0] # dummy to get color if needed, but ax.step above already did
-        color = ax.get_lines()[-1].get_color()
         ax.axvline(mean_est, color=color, linestyle='--', alpha=0.3)
         ax.axvline(median_est, color=color, linestyle='-', alpha=0.3)
         
@@ -309,20 +353,20 @@ def render_mask_separated_fast_overlay(items_counts, title="Combined Histograms 
         mask_items = masks[mask_name]
         
         # Use a color palette for multiple images within the same mask
-        palette = sns.color_palette("husl", len(mask_items))
+        palette_name = probe_colors.get("__palette__", "husl") if probe_colors else "husl"
+        palette = sns.color_palette(palette_name, len(mask_items))
         
         for i, (label, counts, img_name) in enumerate(mask_items):
             # Format legend label: <well_position>_<Probe>
             identity = build_histogram_identity(img_name, mask_name)
             legend_label = label
-            probe = identity.image.probe
             if identity.image.well_position and identity.image.probe:
                 legend_label = identity.image.well_probe_key
             
             # Determine color
             color = palette[i]
-            if probe_colors and probe in probe_colors:
-                color = probe_colors[probe]
+            if probe_colors:
+                color = probe_colors.get(identity.color_key, color)
 
             # Normalize counts to density
             total = np.sum(counts)
@@ -404,20 +448,20 @@ def create_mask_separated_histograms(items_to_render, title="Mask Separated Hist
         mask_items = masks[mask_name]
         
         # Use a color palette for multiple images within the same mask
-        palette = sns.color_palette("husl", len(mask_items))
+        palette_name = probe_colors.get("__palette__", "husl") if probe_colors else "husl"
+        palette = sns.color_palette(palette_name, len(mask_items))
         
         for i, (label, values, img_name) in enumerate(mask_items):
             # Format legend label: <well_position>_<Probe>
             identity = build_histogram_identity(img_name, mask_name)
             legend_label = label
-            probe = identity.image.probe
             if identity.image.well_position and identity.image.probe:
                 legend_label = identity.image.well_probe_key
             
             # Determine color
             color = palette[i]
-            if probe_colors and probe in probe_colors:
-                color = probe_colors[probe]
+            if probe_colors:
+                color = probe_colors.get(identity.color_key, color)
 
             sns.histplot(values, kde=show_kde, ax=ax, label=legend_label, element="step", color=color, stat="density")
             
